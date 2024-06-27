@@ -1,0 +1,126 @@
+-- Retrieve detailed information about all databases
+
+-- Temporary table to store results
+IF OBJECT_ID('tempdb..#DatabaseInfo') IS NOT NULL
+    DROP TABLE #DatabaseInfo;
+
+CREATE TABLE #DatabaseInfo (
+    DatabaseName NVARCHAR(256),
+    FileName NVARCHAR(256),
+    FileType NVARCHAR(120),
+    FileGroupName NVARCHAR(120),
+    FileLocation NVARCHAR(500),
+    FileSizeMB DECIMAL(10,2),
+    UsedSpaceMB DECIMAL(10,2),
+    FreeSpaceMB DECIMAL(10,2),
+    AutoGrowStatus NVARCHAR(100),
+    Owner NVARCHAR(128),
+    Users NVARCHAR(MAX),
+    Roles NVARCHAR(MAX),
+    Permissions NVARCHAR(MAX),
+    MaxDOP INT
+);
+
+-- Insert database file details
+INSERT INTO #DatabaseInfo (DatabaseName, FileName, FileType, FileGroupName, FileLocation, FileSizeMB, UsedSpaceMB, FreeSpaceMB, AutoGrowStatus)
+SELECT 
+    db.name AS DatabaseName,
+    mf.name AS FileName,
+    CASE mf.type
+        WHEN 0 THEN 'Data File'
+        WHEN 1 THEN 'Log File'
+        ELSE 'Unknown'
+    END AS FileType,
+    fg.name AS FileGroupName,
+    mf.physical_name AS FileLocation,
+    mf.size * 8 / 1024 AS FileSizeMB,
+    (mf.size * 8 / 1024) - (FILEPROPERTY(mf.name, 'SpaceUsed') * 8 / 1024) AS FreeSpaceMB,
+    FILEPROPERTY(mf.name, 'SpaceUsed') * 8 / 1024 AS UsedSpaceMB,
+    CASE mf.is_percent_growth
+        WHEN 1 THEN 'Percentage: ' + CAST(mf.growth AS NVARCHAR(100)) + '%'
+        ELSE 'Fixed Size: ' + CAST(mf.growth * 8 / 1024 AS NVARCHAR(100)) + ' MB'
+    END AS AutoGrowStatus
+FROM 
+    sys.master_files mf
+JOIN 
+    sys.databases db ON mf.database_id = db.database_id
+LEFT JOIN 
+    sys.filegroups fg ON mf.data_space_id = fg.data_space_id;
+
+-- Update with database owners
+UPDATE #DatabaseInfo
+SET Owner = su.name
+FROM #DatabaseInfo di
+JOIN sys.databases sd ON di.DatabaseName = sd.name
+JOIN sys.sysusers su ON sd.owner_sid = su.sid
+WHERE sd.database_id = DB_ID(di.DatabaseName);
+
+-- Update with database users, roles, and permissions
+DECLARE @SQL NVARCHAR(MAX) = '';
+DECLARE @DBName NVARCHAR(128);
+
+-- Cursor to iterate over each database
+DECLARE db_cursor CURSOR FOR 
+SELECT name FROM sys.databases WHERE state_desc = 'ONLINE';
+
+OPEN db_cursor;
+
+FETCH NEXT FROM db_cursor INTO @DBName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @SQL = '
+    USE [' + @DBName + '];
+    
+    -- Update Users
+    UPDATE di
+    SET Users = STUFF((SELECT '','' + sp.name 
+                       FROM [' + @DBName + '].sys.database_principals sp 
+                       WHERE sp.principal_id NOT IN (1,2,3,4,6,7,10) AND sp.type IN (''S'',''U'',''G'')
+                       FOR XML PATH(''''), TYPE).value(''''.'', ''NVARCHAR(MAX)''), 1, 1, '''')
+    FROM #DatabaseInfo di
+    WHERE di.DatabaseName = ''' + @DBName + ''';
+
+    -- Update Roles
+    UPDATE di
+    SET Roles = STUFF((SELECT '','' + dp.name 
+                       FROM [' + @DBName + '].sys.database_role_members drm
+                       JOIN [' + @DBName + '].sys.database_principals dp ON drm.role_principal_id = dp.principal_id
+                       JOIN [' + @DBName + '].sys.database_principals sp ON drm.member_principal_id = sp.principal_id
+                       WHERE sp.principal_id NOT IN (1,2,3,4,6,7,10) AND sp.type IN (''S'',''U'',''G'')
+                       FOR XML PATH(''''), TYPE).value(''''.'', ''NVARCHAR(MAX)''), 1, 1, '''')
+    FROM #DatabaseInfo di
+    WHERE di.DatabaseName = ''' + @DBName + ''';
+
+    -- Update Permissions
+    UPDATE di
+    SET Permissions = STUFF((SELECT '','' + dp.permission_name 
+                             FROM [' + @DBName + '].sys.database_permissions dp
+                             JOIN [' + @DBName + '].sys.database_principals sp ON dp.grantee_principal_id = sp.principal_id
+                             WHERE sp.principal_id NOT IN (1,2,3,4,6,7,10) AND sp.type IN (''S'',''U'',''G'')
+                             FOR XML PATH(''''), TYPE).value(''''.'', ''NVARCHAR(MAX)''), 1, 1, '''')
+    FROM #DatabaseInfo di
+    WHERE di.DatabaseName = ''' + @DBName + ''';
+    ';
+    
+    EXEC sp_executesql @SQL;
+
+    FETCH NEXT FROM db_cursor INTO @DBName;
+END;
+
+CLOSE db_cursor;
+DEALLOCATE db_cursor;
+
+-- Retrieve MAXDOP setting
+DECLARE @MaxDOP INT;
+SELECT @MaxDOP = CAST(value AS INT)
+FROM sys.configurations
+WHERE name = 'max degree of parallelism';
+
+-- Update with MAXDOP settings
+UPDATE #DatabaseInfo
+SET MaxDOP = @MaxDOP;
+
+-- Select results
+SELECT * FROM #DatabaseInfo
+ORDER BY DatabaseName, FileType;
