@@ -1,0 +1,61 @@
+-- Temporary table to store results
+IF OBJECT_ID('tempdb..#DatabaseInfo') IS NOT NULL
+    DROP TABLE #DatabaseInfo;
+
+CREATE TABLE #DatabaseInfo (
+    DatabaseName NVARCHAR(256),
+    Owner NVARCHAR(128),
+    Users NVARCHAR(MAX),
+    Roles NVARCHAR(MAX),
+    Permissions NVARCHAR(MAX)
+);
+
+-- Cursor to iterate over each database and collect users, roles, permissions
+DECLARE @SQL NVARCHAR(MAX);
+DECLARE @DBName NVARCHAR(128);
+
+DECLARE db_cursor CURSOR FOR 
+SELECT name FROM sys.databases WHERE state_desc = 'ONLINE';
+
+OPEN db_cursor;
+FETCH NEXT FROM db_cursor INTO @DBName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @SQL = N'
+    USE ' + QUOTENAME(@DBName) + ';
+
+    -- Insert database info
+    INSERT INTO #DatabaseInfo (DatabaseName, Owner, Users, Roles, Permissions)
+    VALUES (
+        ''' + @DBName + ''',
+        (SELECT sp.name
+         FROM sys.databases sd
+         JOIN sys.server_principals sp ON sd.owner_sid = sp.sid
+         WHERE sd.name = ''' + @DBName + '''),
+        STUFF((SELECT '','' + dp.name
+               FROM sys.database_principals dp 
+               WHERE dp.type IN (''S'', ''U'', ''G'') 
+               FOR XML PATH('''')), 1, 1, ''''),
+        STUFF((SELECT '','' + dp.name
+               FROM sys.database_role_members drm
+               JOIN sys.database_principals dp ON drm.role_principal_id = dp.principal_id
+               FOR XML PATH('''')), 1, 1, ''''),
+        STUFF((SELECT '','' + dp.permission_name
+               FROM sys.database_permissions dp
+               JOIN sys.database_principals sp ON dp.grantee_principal_id = sp.principal_id
+               WHERE sp.type IN (''S'', ''U'', ''G'') 
+               FOR XML PATH('''')), 1, 1, '''')
+    );';
+
+    EXEC sp_executesql @SQL;
+
+    FETCH NEXT FROM db_cursor INTO @DBName;
+END;
+
+CLOSE db_cursor;
+DEALLOCATE db_cursor;
+
+-- Select results
+SELECT * FROM #DatabaseInfo
+ORDER BY DatabaseName;
