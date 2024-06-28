@@ -1,0 +1,59 @@
+-- Declare variables to hold replication roles
+DECLARE @IsPublisher BIT = 0;
+DECLARE @IsDistributor BIT = 0;
+DECLARE @IsSubscriber BIT = 0;
+
+-- Check if the server is a Publisher
+IF EXISTS (SELECT 1 FROM msdb.dbo.MSpublications)
+    SET @IsPublisher = 1;
+
+-- Check if the server is a Distributor
+IF EXISTS (SELECT 1 FROM msdb.dbo.MSdistribution_agents)
+    SET @IsDistributor = 1;
+
+-- Check if the server is a Subscriber
+IF EXISTS (SELECT 1 FROM msdb.dbo.MSsubscriptions)
+    SET @IsSubscriber = 1;
+
+-- Combine everything into a single result
+SELECT
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max server memory (MB)') AS MaxServerMemoryMB,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'min server memory (MB)') AS MinServerMemoryMB,
+    (SELECT physical_memory_in_use_kb / 1024 FROM sys.dm_os_process_memory) AS TotalPhysicalMemoryMB,
+    (SELECT available_physical_memory_kb / 1024 FROM sys.dm_os_sys_memory) AS AvailablePhysicalMemoryMB,
+    (SELECT committed_kb / 1024 FROM sys.dm_os_process_memory) AS SqlServerMemoryUsageMB,
+    (SELECT physical_memory_in_use_kb / 1024 FROM sys.dm_os_process_memory) AS SqlServerMemoryInUseMB,
+    (SELECT TOP 1 pages_kb / 1024 FROM sys.dm_os_memory_clerks WHERE type = 'MEMORYCLERK_SQLBUFFERPOOL') AS BufferPoolMemoryMB,
+    CASE 
+        WHEN (SELECT value_in_use FROM sys.configurations WHERE name = 'max server memory (MB)') = 0 THEN 'Max server memory not configured'
+        ELSE 'Max server memory configured'
+    END AS MaxMemoryConfiguredStatus,
+    @IsPublisher AS IsPublisher,
+    @IsDistributor AS IsDistributor,
+    @IsSubscriber AS IsSubscriber,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max degree of parallelism') AS MaxDOP,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'cost threshold for parallelism') AS CostThresholdForParallelism,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'fill factor (%)') AS FillFactor,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max worker threads') AS MaxWorkerThreads,
+    CASE 
+        WHEN (SELECT COUNT(*) FROM sys.dm_exec_requests WHERE command = 'DBCC TRACEON') > 0 THEN 'Trace flags enabled'
+        ELSE 'No trace flags enabled'
+    END AS TraceFlagsStatus
+Explanation:
+Replication Checks:
+
+Checks the presence of publications in msdb.dbo.MSpublications to determine if the server is a Publisher.
+Checks the presence of distribution agents in msdb.dbo.MSdistribution_agents to determine if the server is a Distributor.
+Checks the presence of subscriptions in msdb.dbo.MSsubscriptions to determine if the server is a Subscriber.
+Memory and Configuration:
+
+Retrieves the configured values for max and min server memory, total physical memory, available physical memory, SQL Server memory usage, and buffer pool memory.
+Retrieves settings for Max Degree of Parallelism, Cost Threshold for Parallelism, Fill Factor, and Max Worker Threads.
+Checks if any trace flags are enabled by looking for DBCC TRACEON commands in sys.dm_exec_requests.
+This query provides a comprehensive overview of the server's memory settings, replication roles, and other important configuration settings.
+
+
+
+
+
+
