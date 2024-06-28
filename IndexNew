@@ -1,0 +1,73 @@
+DECLARE @TableName NVARCHAR(128)
+DECLARE @IndexName NVARCHAR(128)
+DECLARE @IndexId INT
+DECLARE @ColumnList NVARCHAR(MAX)
+DECLARE @IncludedColumnList NVARCHAR(MAX)
+DECLARE @IsUnique BIT
+DECLARE @IsClustered BIT
+DECLARE @SQL NVARCHAR(MAX)
+
+-- Cursor to iterate through each table and index
+DECLARE IndexCursor CURSOR FOR
+SELECT
+    t.name AS TableName,
+    i.name AS IndexName,
+    i.index_id AS IndexId,
+    i.is_unique AS IsUnique,
+    i.type AS IsClustered
+FROM
+    sys.tables t
+    INNER JOIN sys.indexes i ON t.object_id = i.object_id
+WHERE
+    i.type IN (1, 2) -- Clustered and Non-Clustered indexes
+ORDER BY
+    t.name, i.name
+
+OPEN IndexCursor
+FETCH NEXT FROM IndexCursor INTO @TableName, @IndexName, @IndexId, @IsUnique, @IsClustered
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Get columns for the index
+    SELECT @ColumnList = STRING_AGG(c.name, ', ')
+    FROM
+        sys.index_columns ic
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE
+        ic.object_id = OBJECT_ID(@TableName) AND ic.index_id = @IndexId AND ic.is_included_column = 0
+    ORDER BY
+        ic.key_ordinal
+
+    -- Get included columns for the index
+    SELECT @IncludedColumnList = STRING_AGG(c.name, ', ')
+    FROM
+        sys.index_columns ic
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE
+        ic.object_id = OBJECT_ID(@TableName) AND ic.index_id = @IndexId AND ic.is_included_column = 1
+    ORDER BY
+        ic.index_column_id
+
+    -- Generate the CREATE INDEX script
+    SET @SQL = 'CREATE ' +
+        CASE @IsUnique
+            WHEN 1 THEN 'UNIQUE '
+            ELSE ''
+        END +
+        CASE @IsClustered
+            WHEN 1 THEN 'CLUSTERED '
+            WHEN 2 THEN 'NONCLUSTERED '
+        END +
+        'INDEX [' + @IndexName + '] ON [' + OBJECT_SCHEMA_NAME(OBJECT_ID(@TableName)) + '].[' + @TableName + '] (' + @ColumnList + ')'
+
+    IF @IncludedColumnList IS NOT NULL
+    BEGIN
+        SET @SQL = @SQL + ' INCLUDE (' + @IncludedColumnList + ')'
+    END
+
+    PRINT @SQL
+    FETCH NEXT FROM IndexCursor INTO @TableName, @IndexName, @IndexId, @IsUnique, @IsClustered
+END
+
+CLOSE IndexCursor
+DEALLOCATE IndexCursor
