@@ -1,0 +1,15 @@
+-- Get SQL Server memory configuration and usage
+SELECT 
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max server memory (MB)') AS MaxServerMemoryMB,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'min server memory (MB)') AS MinServerMemoryMB,
+    (SELECT physical_memory_kb / 1024 FROM sys.dm_os_sys_memory) AS TotalPhysicalMemoryMB,
+    (SELECT available_physical_memory_kb / 1024 FROM sys.dm_os_sys_memory) AS AvailablePhysicalMemoryMB,
+    (SELECT committed_kb / 1024 FROM sys.dm_os_process_memory) AS SqlServerMemoryUsageMB,
+    (SELECT physical_memory_in_use_kb / 1024 FROM sys.dm_os_process_memory) AS SqlServerMemoryInUseMB,
+    (SELECT pages_kb / 1024 FROM sys.dm_os_memory_clerks WHERE type = 'MEMORYCLERK_SQLBUFFERPOOL') AS BufferPoolMemoryMB,
+    (SELECT CASE 
+                WHEN value_in_use = 0 THEN 'Max server memory not configured'
+                ELSE 'Max server memory configured'
+            END 
+     FROM sys.configurations 
+     WHERE name = 'max server memory (MB)') AS MaxMemoryConfiguredStatus
