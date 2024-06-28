@@ -1,0 +1,181 @@
+-- Declare variables for CPU and MAXDOP calculation
+DECLARE @hyperthreadingRatio BIT;
+DECLARE @logicalCPUs INT;
+DECLARE @HTEnabled INT;
+DECLARE @physicalCPU INT;
+DECLARE @logicalCPUPerNuma INT;
+DECLARE @NoOfNUMA INT;
+DECLARE @MaxDOP INT;
+
+-- CPU and MAXDOP Calculation
+SELECT @logicalCPUs = cpu_count,                     -- [Logical CPU Count]
+       @hyperthreadingRatio = hyperthread_ratio,     --  [Hyperthread Ratio]
+       @physicalCPU = cpu_count / hyperthread_ratio, -- [Physical CPU Count]
+       @HTEnabled = CASE
+                        WHEN cpu_count > hyperthread_ratio THEN
+                            1
+                        ELSE
+                            0
+                    END                              -- HTEnabled
+FROM sys.dm_os_sys_info
+OPTION (RECOMPILE);
+
+SELECT @logicalCPUPerNuma = COUNT(parent_node_id) -- [NumberOfLogicalProcessorsPerNuma]
+FROM sys.dm_os_schedulers
+WHERE [status] = 'VISIBLE ONLINE'
+      AND parent_node_id < 64
+GROUP BY parent_node_id
+OPTION (RECOMPILE);
+
+SELECT @NoOfNUMA = COUNT(DISTINCT parent_node_id)
+FROM sys.dm_os_schedulers -- find NO OF NUMA Nodes
+WHERE [status] = 'VISIBLE ONLINE'
+      AND parent_node_id < 64;
+
+IF @NoOfNUMA > 1
+   AND @HTEnabled = 0
+    SET @MaxDOP = @logicalCPUPerNuma;
+ELSE IF @NoOfNUMA > 1
+        AND @HTEnabled = 1
+    SET @MaxDOP = ROUND(@NoOfNUMA / @physicalCPU * 1.0, 0);
+ELSE IF @HTEnabled = 0
+    SET @MaxDOP = @logicalCPUs;
+ELSE IF @HTEnabled = 1
+    SET @MaxDOP = @physicalCPU;
+
+IF @MaxDOP > 10
+    SET @MaxDOP = 10;
+IF @MaxDOP = 0
+    SET @MaxDOP = 1;
+
+-- Comprehensive server information including CPU and MAXDOP details
+SELECT 
+    @@VERSION AS 'Version Information',
+    SERVERPROPERTY('MachineName') AS [MachineName],
+    SERVERPROPERTY('ServerName') AS [ServerName],
+    SERVERPROPERTY('InstanceName') AS [InstanceName],
+    SERVERPROPERTY('ProductVersion') AS [ProductVersion],
+    SERVERPROPERTY('ProductLevel') AS [ProductLevel],
+    SERVERPROPERTY('Edition') AS [Edition],
+    SERVERPROPERTY('EngineEdition') AS [EngineEdition],
+    SERVERPROPERTY('ResourceLastUpdateDateTime') AS 'Last Patch Date',
+    CONNECTIONPROPERTY('net_transport') AS net_transport,
+    CONNECTIONPROPERTY('protocol_type') AS protocol_type,
+    CONNECTIONPROPERTY('auth_scheme') AS auth_scheme,
+    CONNECTIONPROPERTY('local_net_address') AS local_net_address,
+    CONNECTIONPROPERTY('local_tcp_port') AS local_tcp_port,
+    CONNECTIONPROPERTY('client_net_address') AS client_net_address,
+    SERVERPROPERTY('IsClustered') AS IsClustered,
+    SERVERPROPERTY('Collation') AS Collation,
+    SERVERPROPERTY('SqlCharSetName') AS CharacterSetName,
+    CASE SERVERPROPERTY('IsIntegratedSecurityOnly')
+        WHEN 1 THEN 'Windows Authentication'  
+        WHEN 0 THEN 'Windows and SQL Server Authentication'  
+        ELSE 'Unknown'  
+    END as [Authentication Mode],
+    servicename AS ServiceName,
+    COALESCE(service_account, 'Not specified') AS ServiceAccount,
+    startup_type_desc AS StartupType,
+    status_desc AS ServiceStatus,
+    -- Memory Configuration
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'min server memory (MB)') AS MinServerMemoryMB,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max server memory (MB)') AS MaxServerMemoryMB,
+    (SELECT physical_memory_kb / 1024 FROM sys.dm_os_sys_memory) AS PhysicalMemoryMB,
+    (SELECT available_physical_memory_kb / 1024 FROM sys.dm_os_sys_memory) AS AvailableMemoryMB,
+    (SELECT SUM(virtual_memory_reserved_kb + virtual_memory_committed_kb) / 1024 FROM sys.dm_os_memory_clerks) AS SqlServerMemoryUsageMB,
+    -- Windows Memory Usage
+    ((SELECT physical_memory_kb FROM sys.dm_os_sys_memory) - (SELECT available_physical_memory_kb FROM sys.dm_os_sys_memory)) / 1024 AS WindowsMemoryUsageMB,
+    -- Always On Availability Groups
+    CASE 
+        WHEN EXISTS (SELECT 1 FROM sys.dm_hadr_availability_group_states) 
+        THEN 'Yes' 
+        ELSE 'No' 
+    END AS IsAlwaysOnConfigured,
+    -- Replication
+    CASE 
+        WHEN EXISTS (SELECT 1 FROM msdb.dbo.MSpublications)
+            OR EXISTS (SELECT 1 FROM msdb.dbo.MSsubscriptions)
+            OR EXISTS (SELECT 1 FROM msdb.dbo.MSreplication_monitors)
+        THEN 'Yes'
+        ELSE 'No'
+    END AS IsReplicationConfigured,
+    -- CPU and MAXDOP Details
+    CONVERT(VARCHAR, @logicalCPUs) AS 'Logical CPUs',
+    CONVERT(VARCHAR, @hyperthreadingRatio) AS 'Hyperthreading Ratio',
+    CONVERT(VARCHAR, @physicalCPU) AS 'Physical CPUs',
+    CONVERT(VARCHAR, @HTEnabled) AS 'Hyperthreading Enabled',
+    CONVERT(VARCHAR, @logicalCPUPerNuma) AS 'Logical CPUs per NUMA',
+    CONVERT(VARCHAR, @NoOfNUMA) AS 'Number of NUMA Nodes',
+    'MAXDOP setting should be : ' + CONVERT(VARCHAR, @MaxDOP) AS MaxDOPSetting,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max degree of parallelism') AS CurrentMaxDOPSetting,
+    -- Additional Configurations
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'cost threshold for parallelism') AS CostThresholdForParallelism,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'fill factor (%)') AS FillFactor,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max worker threads') AS MaxWorkerThreads,
+    -- Trace Flags
+    STUFF((SELECT ', ' + CAST(traceflag AS VARCHAR)
+           FROM sys.dm_db_fts_index_population
+           FOR XML PATH('')), 1, 2, '') AS TraceFlags
+FROM 
+    sys.dm_server_services;
+
+-- Details of Always On Availability Groups
+SELECT 
+    ag.name AS AvailabilityGroupName,
+    ag.primary_replica AS PrimaryReplica,
+    ar.replica_server_name AS ReplicaServerName,
+    ar.availability_mode_desc AS AvailabilityMode,
+    ar.failover_mode_desc AS FailoverMode,
+    ar.session_timeout AS SessionTimeout,
+    ar.primary_role_allow_connections_desc AS PrimaryRoleAllowConnections,
+    ar.secondary_role_allow_connections_desc AS SecondaryRoleAllowConnections,
+    agd.database_name AS DatabaseName,
+    ags.primary_recovery_health_desc AS PrimaryRecoveryHealth,
+    ags.secondary_recovery_health_desc AS SecondaryRecoveryHealth,
+    ags.synchronization_health_desc AS SynchronizationHealth
+FROM 
+    sys.availability_groups ag
+JOIN 
+    sys.availability_replicas ar ON ag.group_id = ar.group_id
+JOIN 
+    sys.dm_hadr_availability_group_states ags ON ag.group_id = ags.group_id
+LEFT JOIN 
+    sys.dm_hadr_database_replica_states agd ON ar.group_id = agd.group_id
+ORDER BY 
+    ag.name, ar.replica_server_name;
+
+-- Details of Replication Publications and Subscriptions
+SELECT 
+    p.publisher AS Publisher,
+    p.publisher_db AS PublisherDB,
+    p.publication AS Publication,
+    p.publication_type AS PublicationType,
+    CASE p.publication_type
+        WHEN 0 THEN 'Transactional'
+        WHEN 1 THEN 'Snapshot'
+        WHEN 2 THEN 'Transactional with updatable subscriptions'
+        WHEN 3 THEN 'Peer-to-Peer'
+        ELSE 'Unknown'
+    END AS PublicationTypeDescription,
+    s.subscriber AS Subscriber,
+    s.subscriber_db AS SubscriberDB,
+    s.subscription_type AS SubscriptionType,
+    s.subscription_status AS SubscriptionStatus,
+    CASE s.subscription_type
+        WHEN 0 THEN 'Push'
+        WHEN 1 THEN 'Pull'
+        ELSE 'Unknown'
+    END AS SubscriptionTypeDescription,
+    CASE s.subscription_status
+        WHEN 0 THEN 'Inactive'
+        WHEN 1 THEN 'Subscribed'
+        WHEN 2 THEN 'Inactive'
+        WHEN 3 THEN 'Active'
+        ELSE 'Unknown'
+    END AS SubscriptionStatusDescription
+FROM 
+    msdb.dbo.MSpublications p
+LEFT JOIN 
+    msdb.dbo.MSsubscriptions s ON p.publication_id = s.publication_id
+ORDER BY 
+    p.publisher, p.publication, s.subscriber;
