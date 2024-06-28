@@ -1,0 +1,107 @@
+-- Get server and memory information
+SELECT @@VERSION AS 'Version Information',
+    SERVERPROPERTY('MachineName') AS [MachineName],
+    SERVERPROPERTY('ServerName') AS [ServerName],
+    SERVERPROPERTY('InstanceName') AS [InstanceName],
+    SERVERPROPERTY('ProductVersion') AS [ProductVersion],
+    SERVERPROPERTY('ProductLevel') AS [ProductLevel],
+    SERVERPROPERTY('Edition') AS [Edition],
+    SERVERPROPERTY('EngineEdition') AS [EngineEdition],
+    SERVERPROPERTY('ResourceLastUpdateDateTime') AS 'Last Patch Date',
+    CONNECTIONPROPERTY('net_transport') AS net_transport,
+    CONNECTIONPROPERTY('protocol_type') AS protocol_type,
+    CONNECTIONPROPERTY('auth_scheme') AS auth_scheme,
+    CONNECTIONPROPERTY('local_net_address') AS local_net_address,
+    CONNECTIONPROPERTY('local_tcp_port') AS local_tcp_port,
+    CONNECTIONPROPERTY('client_net_address') AS client_net_address,
+    SERVERPROPERTY('IsClustered') AS IsClustered,
+    SERVERPROPERTY('Collation') AS Collation,
+    SERVERPROPERTY('SqlCharSetName') AS CharacterSetName,
+    SERVERPROPERTY('IsHadrEnabled') AS IsAlwaysOn,
+    (SELECT COUNT(1) FROM sys.dm_hadr_availability_replica_states) AS AvailabilityReplicas,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max server memory (MB)') AS MaxServerMemoryMB,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'min server memory (MB)') AS MinServerMemoryMB,
+    (SELECT physical_memory_in_use_kb / 1024 FROM sys.dm_os_process_memory) AS TotalPhysicalMemoryMB,
+    (SELECT available_physical_memory_kb / 1024 FROM sys.dm_os_sys_memory) AS AvailablePhysicalMemoryMB,
+    (SELECT committed_kb / 1024 FROM sys.dm_os_sys_info) AS SqlServerMemoryUsageMB,
+    (SELECT physical_memory_in_use_kb / 1024 FROM sys.dm_os_process_memory) AS SqlServerMemoryInUseMB,
+    (SELECT TOP 1 pages_kb / 1024 FROM sys.dm_os_memory_clerks WHERE type = 'MEMORYCLERK_SQLBUFFERPOOL') AS BufferPoolMemoryMB,
+    (SELECT CASE
+                WHEN value_in_use = 0 THEN 'Max server memory not configured'
+                ELSE 'Max server memory configured'
+            END
+     FROM sys.configurations
+     WHERE name = 'max server memory (MB)') AS MaxMemoryConfiguredStatus,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max degree of parallelism') AS MaxDOP,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'cost threshold for parallelism') AS CostThresholdForParallelism,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'fill factor (%)') AS FillFactor,
+    (SELECT value_in_use FROM sys.configurations WHERE name = 'max worker threads') AS MaxWorkerThreads,
+    servicename AS ServiceName,
+    COALESCE(service_account, 'Not specified') AS ServiceAccount,
+    startup_type_desc AS StartupType,
+    status_desc AS ServiceStatus 
+FROM
+    sys.dm_server_services
+
+-- Generate CREATE INDEX statements
+DECLARE @TableName NVARCHAR(128)
+DECLARE @IndexName NVARCHAR(128)
+DECLARE @IndexId INT
+DECLARE @ColumnList NVARCHAR(MAX)
+DECLARE @IncludedColumnList NVARCHAR(MAX)
+DECLARE @IsUnique BIT
+DECLARE @IsClustered BIT
+DECLARE @SQL NVARCHAR(MAX)
+
+-- Cursor to iterate through each table and index
+DECLARE IndexCursor CURSOR FOR
+SELECT
+    t.name AS TableName,
+    i.name AS IndexName,
+    i.index_id AS IndexId,
+    i.is_unique AS IsUnique,
+    i.type AS IsClustered
+FROM
+    sys.tables t
+    INNER JOIN sys.indexes i ON t.object_id = i.object_id
+WHERE
+    i.type IN (1, 2) -- Clustered and Non-Clustered indexes
+ORDER BY
+    t.name, i.name
+
+OPEN IndexCursor
+FETCH NEXT FROM IndexCursor INTO @TableName, @IndexName, @IndexId, @IsUnique, @IsClustered
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Get columns for the index
+    SELECT @ColumnList = STRING_AGG(c.name, ', ')
+    FROM
+        sys.index_columns ic
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE
+        ic.object_id = OBJECT_ID(@TableName) AND ic.index_id = @IndexId AND ic.is_included_column = 0
+    ORDER BY
+        ic.key_ordinal
+
+    -- Get included columns for the index
+    SELECT @IncludedColumnList = STRING_AGG(c.name, ', ')
+    FROM
+        sys.index_columns ic
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+    WHERE
+        ic.object_id = OBJECT_ID(@TableName) AND ic.index_id = @IndexId AND ic.is_included_column = 1
+    ORDER BY
+        ic.index_column_id
+
+    -- Generate the CREATE INDEX script
+    SET @SQL = 'CREATE ' +
+        CASE @IsUnique
+            WHEN 1 THEN 'UNIQUE '
+            ELSE ''
+        END +
+        CASE @IsClustered
+            WHEN 1 THEN 'CLUSTERED '
+            WHEN 2 THEN 'NONCLUSTERED '
+        END +
+        '
