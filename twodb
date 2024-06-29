@@ -1,0 +1,103 @@
+DECLARE @DatabaseName NVARCHAR(128)
+DECLARE @TableName NVARCHAR(128)
+DECLARE @IndexName NVARCHAR(128)
+DECLARE @IndexType NVARCHAR(50)
+DECLARE @IsUnique BIT
+DECLARE @IsClustered BIT
+DECLARE @ColumnList NVARCHAR(MAX)
+DECLARE @IncludedColumnList NVARCHAR(MAX)
+DECLARE @SQL NVARCHAR(MAX)
+
+-- Table to store index scripts
+IF OBJECT_ID('tempdb..#IndexScripts') IS NOT NULL
+    DROP TABLE #IndexScripts
+
+CREATE TABLE #IndexScripts (
+    DatabaseName NVARCHAR(128),
+    TableName NVARCHAR(128),
+    IndexName NVARCHAR(128),
+    IndexType NVARCHAR(50),
+    IndexScript NVARCHAR(MAX)
+)
+
+-- Cursor to iterate through each database
+DECLARE DatabaseCursor CURSOR FOR
+SELECT name
+FROM sys.databases
+WHERE state_desc = 'ONLINE'
+      AND name NOT IN ('master', 'tempdb', 'model', 'msdb') -- Exclude system databases
+
+OPEN DatabaseCursor
+FETCH NEXT FROM DatabaseCursor INTO @DatabaseName
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @SQL = ''
+
+    -- Cursor to iterate through each table and its indexes
+    DECLARE IndexCursor CURSOR FOR
+    SELECT t.name AS TableName,
+           i.name AS IndexName,
+           CASE WHEN i.type = 1 THEN 'CLUSTERED'
+                WHEN i.type = 2 THEN 'NONCLUSTERED'
+                ELSE 'UNKNOWN' END AS IndexType,
+           i.is_unique AS IsUnique,
+           i.type AS IsClustered
+    FROM sys.tables t
+    INNER JOIN sys.indexes i ON t.object_id = i.object_id
+    WHERE t.is_ms_shipped = 0 -- Exclude system tables
+    ORDER BY t.name, i.name
+
+    OPEN IndexCursor
+    FETCH NEXT FROM IndexCursor INTO @TableName, @IndexName, @IndexType, @IsUnique, @IsClustered
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @ColumnList = ''
+        SET @IncludedColumnList = ''
+
+        -- Get column list for the index
+        SELECT @ColumnList = COALESCE(@ColumnList + ', ', '') + QUOTENAME(c.name)
+        FROM sys.index_columns ic
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        WHERE ic.object_id = OBJECT_ID(@TableName) AND ic.index_id = i.index_id AND ic.is_included_column = 0
+        ORDER BY ic.index_column_id
+
+        -- Get included column list for the index
+        SELECT @IncludedColumnList = COALESCE(@IncludedColumnList + ', ', '') + QUOTENAME(c.name)
+        FROM sys.index_columns ic
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        WHERE ic.object_id = OBJECT_ID(@TableName) AND ic.index_id = i.index_id AND ic.is_included_column = 1
+        ORDER BY ic.index_column_id
+
+        -- Build CREATE INDEX statement
+        SET @SQL = 'CREATE ' + 
+                   CASE WHEN @IsUnique = 1 THEN 'UNIQUE ' ELSE '' END + 
+                   @IndexType + ' INDEX ' + QUOTENAME(@IndexName) + ' ON ' + QUOTENAME(@DatabaseName) + '.' + QUOTENAME(@TableName) + ' (' + @ColumnList + ')'
+
+        IF @IncludedColumnList IS NOT NULL AND @IncludedColumnList <> ''
+        BEGIN
+            SET @SQL = @SQL + ' INCLUDE (' + @IncludedColumnList + ')'
+        END
+
+        SET @SQL = @SQL + ';'
+
+        -- Insert into #IndexScripts table
+        INSERT INTO #IndexScripts (DatabaseName, TableName, IndexName, IndexType, IndexScript)
+        VALUES (@DatabaseName, @TableName, @IndexName, @IndexType, @SQL)
+
+        FETCH NEXT FROM IndexCursor INTO @TableName, @IndexName, @IndexType, @IsUnique, @IsClustered
+    END
+
+    CLOSE IndexCursor
+    DEALLOCATE IndexCursor
+
+    FETCH NEXT FROM DatabaseCursor INTO @DatabaseName
+END
+
+CLOSE DatabaseCursor
+DEALLOCATE DatabaseCursor
+
+-- Select from the temporary table
+SELECT * FROM #IndexScripts
+ORDER BY DatabaseName, TableName, IndexName
