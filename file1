@@ -1,0 +1,29 @@
+SELECT
+    db.name AS DatabaseName,
+    mf.name AS FileName,
+    CASE mf.type
+        WHEN 0 THEN 'Data File'
+        WHEN 1 THEN 'Log File'
+        ELSE 'Unknown'
+    END AS FileType,
+    fg.name AS FileGroupName,
+    mf.physical_name AS FileLocation,
+    CAST(mf.size AS BIGINT) * 8 / 1024 AS FileSizeMB,
+    CASE 
+        WHEN FILEPROPERTY(mf.name, 'SpaceUsed') IS NULL THEN NULL
+        ELSE (CAST(mf.size AS BIGINT) * 8 / 1024) - (FILEPROPERTY(mf.name, 'SpaceUsed') * 8 / 1024)
+    END AS FreeSpaceMB,
+    CASE 
+        WHEN FILEPROPERTY(mf.name, 'SpaceUsed') IS NULL THEN NULL
+        ELSE FILEPROPERTY(mf.name, 'SpaceUsed') * 8 / 1024
+    END AS UsedSpaceMB,
+    CASE mf.is_percent_growth
+        WHEN 1 THEN 'Percentage: ' + CAST(mf.growth AS NVARCHAR(100)) + '%'
+        ELSE 'Fixed Size: ' + CAST(CAST(mf.growth AS BIGINT) * 8 / 1024 AS NVARCHAR(100)) + ' MB'
+    END AS AutoGrowStatus
+FROM
+    sys.master_files mf
+JOIN
+    sys.databases db ON mf.database_id = db.database_id
+LEFT JOIN
+    sys.filegroups fg ON mf.data_space_id = fg.data_space_id;
