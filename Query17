@@ -1,0 +1,143 @@
+IF OBJECT_ID('tempdb..#DatabaseInfo') IS NOT NULL
+    DROP TABLE #DatabaseInfo;
+
+CREATE TABLE #DatabaseInfo (
+    [Server] [varchar] (128) NULL,
+    [DatabaseName] [varchar] (128) NULL,
+    [File Name] [sys].[sysname] NOT NULL,
+    [FileType] [varchar] (60) NULL,
+    [FileGroupName] [varchar] (128) NULL,
+    [Type] [varchar] (60) NULL,
+    [Path] [varchar] (260) NULL,
+    [File Size] [varchar] (53) NULL,
+    [File Used Space] [varchar] (53) NULL,
+    [File Free Space] [varchar] (53) NULL,
+    [% Free File Space] [varchar] (51) NULL,
+    [Autogrowth] [varchar] (53) NULL,
+    [volume_mount_point] [varchar] (256) NULL,
+    [Total Volume Size] [varchar] (53) NULL,
+    [Free Space] [varchar] (53) NULL,
+    [% Free] [varchar] (51) NULL,
+    [Owner] NVARCHAR(128),
+    Users NVARCHAR(MAX),
+    Roles NVARCHAR(MAX),
+    Permissions NVARCHAR(MAX),
+    MaxDOP INT
+);
+
+-- Insert database file details
+EXEC sp_MSforeachdb '
+INSERT INTO #DatabaseInfo (
+    [Server], [DatabaseName], [File Name], [FileType], [FileGroupName], 
+    [Type], [Path], [File Size], [File Used Space], [File Free Space], 
+    [% Free File Space], [Autogrowth], [volume_mount_point], 
+    [Total Volume Size], [Free Space], [% Free]
+)
+SELECT  
+    @@SERVERNAME AS [Server],
+    DB_NAME() AS [Database],
+    MF.name AS [File Name],
+    CASE MF.type
+        WHEN 0 THEN ''Data File''
+        WHEN 1 THEN ''Log File''
+        ELSE ''Unknown''
+    END AS FileType,
+    FG.name AS FileGroupName,
+    MF.type_desc AS [Type],
+    MF.physical_name AS [Path],
+    CAST(CAST(MF.size / 128.0 AS DECIMAL(15, 2)) AS VARCHAR(50)) + '' MB'' AS [File Size],
+    CAST(CONVERT(DECIMAL(10, 2), MF.size / 128.0 - ((MF.size / 128.0) - CAST(FILEPROPERTY(MF.name, ''SPACEUSED'') AS INT) / 128.0)) AS VARCHAR(50)) + '' MB'' AS [File Used Space],
+    CAST(CONVERT(DECIMAL(10, 2), MF.size / 128.0 - CAST(FILEPROPERTY(MF.name, ''SPACEUSED'') AS INT) / 128.0) AS VARCHAR(50)) + '' MB'' AS [File Free Space],
+    CAST(CONVERT(DECIMAL(10, 2), ((MF.size / 128.0 - CAST(FILEPROPERTY(MF.name, ''SPACEUSED'') AS INT) / 128.0) / (MF.size / 128.0)) * 100) AS VARCHAR(50)) + ''%'' AS [% Free File Space],
+    IIF(MF.growth = 0, ''N/A'', CASE WHEN MF.is_percent_growth = 1 THEN CAST(MF.growth AS VARCHAR(50)) + ''%''
+                                   ELSE CAST(MF.growth / 128 AS VARCHAR(50)) + '' MB''
+                                   END) AS [Autogrowth],
+    VS.volume_mount_point,
+    CAST(CAST(VS.total_bytes / 1024. / 1024 / 1024 AS DECIMAL(20, 2)) AS VARCHAR(50)) + '' GB'' AS [Total Volume Size],
+    CAST(CAST(VS.available_bytes / 1024. / 1024 / 1024 AS DECIMAL(20, 2)) AS VARCHAR(50)) + '' GB'' AS [Free Space],
+    CAST(CAST(VS.available_bytes / CAST(VS.total_bytes AS DECIMAL(20, 2)) * 100 AS DECIMAL(20, 2)) AS VARCHAR(50)) + ''%'' AS [% Free]
+FROM    
+    sys.database_files MF
+    LEFT JOIN sys.filegroups FG ON MF.data_space_id = FG.data_space_id
+    CROSS APPLY sys.dm_os_volume_stats(DB_ID(), MF.file_id) VS;
+';
+
+-- Update with database owners
+UPDATE #DatabaseInfo
+SET Owner = su.name
+FROM #DatabaseInfo di
+JOIN sys.databases sd ON di.DatabaseName = sd.name
+JOIN sys.sysusers su ON sd.owner_sid = su.sid
+WHERE sd.database_id = DB_ID(di.DatabaseName);
+
+-- Update with database users, roles, and permissions
+DECLARE @SQL NVARCHAR(MAX) = '';
+DECLARE @DBName NVARCHAR(128);
+
+-- Cursor to iterate over each database
+DECLARE db_cursor CURSOR FOR
+SELECT name FROM sys.databases WHERE state_desc = 'ONLINE';
+
+OPEN db_cursor;
+
+FETCH NEXT FROM db_cursor INTO @DBName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @SQL = '
+    USE [' + @DBName + '];
+
+    -- Update Users
+    UPDATE di
+    SET Users = STUFF((SELECT '','' + sp.name
+                       FROM [' + @DBName + '].sys.database_principals sp
+                       WHERE sp.principal_id NOT IN (1,2,3,4,6,7,10) AND sp.type IN (''S'',''U'',''G'')
+                       FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 1, '''')
+    FROM #DatabaseInfo di
+    WHERE di.DatabaseName = ''' + @DBName + ''';
+
+    -- Update Roles
+    UPDATE di
+    SET Roles = STUFF((SELECT '','' + dp.name
+                       FROM [' + @DBName + '].sys.database_role_members drm
+                       JOIN [' + @DBName + '].sys.database_principals dp ON drm.role_principal_id = dp.principal_id
+                       JOIN [' + @DBName + '].sys.database_principals sp ON drm.member_principal_id = sp.principal_id
+                       WHERE sp.principal_id NOT IN (1,2,3,4,6,7,10) AND sp.type IN (''S'',''U'',''G'')
+                       FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 1, '''')
+    FROM #DatabaseInfo di
+    WHERE di.DatabaseName = ''' + @DBName + ''';
+
+    -- Update Permissions
+    UPDATE di
+    SET Permissions = STUFF((SELECT '','' + dp.permission_name
+                             FROM [' + @DBName + '].sys.database_permissions dp
+                             JOIN [' + @DBName + '].sys.database_principals sp ON dp.grantee_principal_id = sp.principal_id
+                             WHERE sp.principal_id NOT IN (1,2,3,4,6,7,10) AND sp.type IN (''S'',''U'',''G'')
+                             FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 1, '''')
+    FROM #DatabaseInfo di
+    WHERE di.DatabaseName = ''' + @DBName + ''';
+    ';
+    PRINT @SQL
+    EXEC sp_executesql @SQL;
+
+    FETCH NEXT FROM db_cursor INTO @DBName;
+END;
+
+CLOSE db_cursor;
+DEALLOCATE db_cursor;
+
+-- Retrieve MAXDOP setting
+DECLARE @MaxDOP INT;
+SELECT @MaxDOP = CAST(value AS INT)
+FROM sys.configurations
+WHERE name = 'max degree of parallelism';
+
+-- Update with MAXDOP settings
+UPDATE #DatabaseInfo
+SET MaxDOP = @MaxDOP;
+
+-- Select results
+SELECT * FROM #DatabaseInfo
+ORDER BY DatabaseName, FileType;
+
+GO
