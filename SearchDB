@@ -1,0 +1,55 @@
+CREATE PROCEDURE SearchDatabaseAcrossServers
+    @DatabaseName NVARCHAR(256)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Create a temporary table to store server names
+    CREATE TABLE #ServerList (
+        ServerName NVARCHAR(256)
+    );
+
+    -- Assuming you have another table ServerInfoTable that contains the server names
+    INSERT INTO #ServerList (ServerName)
+    SELECT ServerName FROM ServerInfoTable;
+
+    DECLARE @ServerName NVARCHAR(256);
+    DECLARE @SQL NVARCHAR(MAX);
+    DECLARE @Results TABLE (
+        ServerName NVARCHAR(256),
+        DatabaseExists BIT
+    );
+
+    DECLARE ServerCursor CURSOR FOR
+    SELECT ServerName FROM #ServerList;
+
+    OPEN ServerCursor;
+    FETCH NEXT FROM ServerCursor INTO @ServerName;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @SQL = '
+        IF EXISTS (SELECT 1 FROM [' + @ServerName + '].master.sys.databases WHERE name = @DatabaseName)
+        BEGIN
+            INSERT INTO @Results (ServerName, DatabaseExists)
+            VALUES (''' + @ServerName + ''', 1);
+        END
+        ELSE
+        BEGIN
+            INSERT INTO @Results (ServerName, DatabaseExists)
+            VALUES (''' + @ServerName + ''', 0);
+        END';
+
+        EXEC sp_executesql @SQL, N'@DatabaseName NVARCHAR(256), @Results TABLE (ServerName NVARCHAR(256), DatabaseExists BIT)', @DatabaseName = @DatabaseName;
+
+        FETCH NEXT FROM ServerCursor INTO @ServerName;
+    END;
+
+    CLOSE ServerCursor;
+    DEALLOCATE ServerCursor;
+
+    SELECT * FROM @Results;
+
+    -- Drop the temporary table
+    DROP TABLE #ServerList;
+END;
