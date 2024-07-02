@@ -1,0 +1,58 @@
+DECLARE @ServerName NVARCHAR(128);
+
+-- Cursor to iterate through the list of servers
+DECLARE ServerCursor CURSOR FOR
+SELECT ServerName FROM #ServerList;
+
+OPEN ServerCursor;
+FETCH NEXT FROM ServerCursor INTO @ServerName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Dynamic SQL to execute on each server
+    DECLARE @SQL NVARCHAR(MAX);
+
+    -- Query for SQL Server Agent log history retention settings
+    SET @SQL = N'
+    USE msdb;
+    SELECT
+        ''' + @ServerName + ''' AS ServerName,
+        CASE 
+            WHEN EXISTS (SELECT 1 FROM msdb.dbo.sysjobhistory WHERE run_status = 1) THEN ''Log history retention is enabled''
+            ELSE ''Log history retention is disabled''
+        END AS LogHistoryRetentionStatus,
+        CASE 
+            WHEN category_id = 0 THEN ''Default retention period''
+            ELSE CAST(category_id AS VARCHAR) + '' days''
+        END AS RetentionPeriod
+    FROM msdb.dbo.sysjobs
+    WHERE name = ''Agent history clean up: distribution'';
+
+    -- Query for job schedule information
+    SELECT 
+        ''' + @ServerName + ''' AS ServerName,
+        s.name AS ScheduleName,
+        j.name AS JobName,
+        CASE 
+            WHEN s.enabled = 1 THEN ''Enabled''
+            ELSE ''Disabled''
+        END AS ScheduleStatus,
+        CAST(sch.next_run_date AS VARCHAR(8)) + '' '' + 
+        STUFF(STUFF(RIGHT(REPLICATE(''0'', 6) + CAST(sch.next_run_time AS VARCHAR(6)), 6), 3, 0, '':'') , 6, 0, '':'') AS NextRunDateTime
+    FROM msdb.dbo.sysjobs AS j
+    INNER JOIN msdb.dbo.sysjobschedules AS js ON j.job_id = js.job_id
+    INNER JOIN msdb.dbo.sysschedules AS s ON js.schedule_id = s.schedule_id
+    INNER JOIN msdb.dbo.sysjobs_view AS sch ON sch.job_id = j.job_id
+    WHERE j.enabled = 1;';
+
+    -- Execute the dynamic SQL on each server
+    EXEC (@SQL) AT @ServerName;
+
+    FETCH NEXT FROM ServerCursor INTO @ServerName;
+END;
+
+CLOSE ServerCursor;
+DEALLOCATE ServerCursor;
+
+-- Drop the temporary table
+DROP TABLE #ServerList;
