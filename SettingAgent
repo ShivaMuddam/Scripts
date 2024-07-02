@@ -1,0 +1,51 @@
+SELECT server_name 
+FROM msdb.dbo.sysmanagement_shared_registered_servers_internal
+WHERE server_name IS NOT NULL;
+
+USE msdb;
+
+-- Query to check SQL Server Agent log history retention settings
+SELECT 
+    @@SERVERNAME AS ServerName,
+    CASE 
+        WHEN value_in_use = 1 THEN 'Retain' 
+        ELSE 'Remove' 
+    END AS LogRetentionPeriod,
+    'Not applicable' AS LogFileSize,
+    'Not applicable' AS LogFileCount
+FROM msdb.dbo.sysjobschedules AS js
+INNER JOIN msdb.dbo.sysjobs AS j ON js.job_id = j.job_id
+WHERE j.enabled = 1;
+
+DECLARE @ServerName VARCHAR(255);
+
+-- List of servers
+DECLARE ServerCursor CURSOR FOR
+SELECT server_name 
+FROM msdb.dbo.sysmanagement_shared_registered_servers_internal
+WHERE server_name IS NOT NULL;
+
+OPEN ServerCursor;
+FETCH NEXT FROM ServerCursor INTO @ServerName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Print the query for each server
+    PRINT 'USE [' + @ServerName + '];'
+    PRINT 'SELECT '
+        + '''' + @ServerName + ''' AS ServerName,'
+        + 'CASE '
+        + 'WHEN value_in_use = 1 THEN ''Retain'' '
+        + 'ELSE ''Remove'' '
+        + 'END AS LogRetentionPeriod,'
+        + '''Not applicable'' AS LogFileSize,'
+        + '''Not applicable'' AS LogFileCount'
+        + ' FROM [' + @ServerName + '].msdb.dbo.sysjobschedules AS js'
+        + ' INNER JOIN [' + @ServerName + '].msdb.dbo.sysjobs AS j ON js.job_id = j.job_id'
+        + ' WHERE j.enabled = 1;';
+
+    FETCH NEXT FROM ServerCursor INTO @ServerName;
+END;
+
+CLOSE ServerCursor;
+DEALLOCATE ServerCursor;
