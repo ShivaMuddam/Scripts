@@ -1,0 +1,28 @@
+SELECT
+    @@SERVERNAME AS ServerName,
+    value_in_use AS LogHistoryRetentionDays
+FROM sys.configurations
+WHERE name = 'agent_log_history_retention';
+GO
+
+
+USE msdb;
+GO
+
+-- Query to check job schedule information
+SELECT 
+    @@SERVERNAME AS ServerName,
+    s.name AS ScheduleName,
+    j.name AS JobName,
+    CASE 
+        WHEN s.enabled = 1 THEN 'Enabled'
+        ELSE 'Disabled'
+    END AS ScheduleStatus,
+    CAST(sch.next_run_date AS VARCHAR(8)) + ' ' + 
+    STUFF(STUFF(RIGHT(REPLICATE('0', 6) + CAST(sch.next_run_time AS VARCHAR(6)), 6), 3, 0, ':') , 6, 0, ':') AS NextRunDateTime
+FROM msdb.dbo.sysjobs AS j
+INNER JOIN msdb.dbo.sysjobschedules AS js ON j.job_id = js.job_id
+INNER JOIN msdb.dbo.sysschedules AS s ON js.schedule_id = s.schedule_id
+INNER JOIN msdb.dbo.sysjobs_view AS sch ON sch.job_id = j.job_id
+WHERE j.enabled = 1;
+GO
