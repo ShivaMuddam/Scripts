@@ -1,0 +1,66 @@
+-- Declare a table variable to store server list
+DECLARE @ServerList TABLE (ServerName VARCHAR(255));
+
+-- Insert your server names into the @ServerList table variable
+INSERT INTO @ServerList (ServerName)
+SELECT server_name 
+FROM msdb.dbo.sysmanagement_shared_registered_servers_internal
+WHERE server_name IS NOT NULL;
+
+-- Declare variables to store server name and dynamic SQL
+DECLARE @ServerName VARCHAR(255);
+DECLARE @SQL NVARCHAR(MAX);
+
+-- Create a table to store the results
+IF OBJECT_ID('tempdb..#AgentLogHistoryRetention') IS NOT NULL
+    DROP TABLE #AgentLogHistoryRetention;
+
+CREATE TABLE #AgentLogHistoryRetention (
+    ServerName VARCHAR(255),
+    LogRetentionPeriod INT,
+    LogFileSize INT,
+    LogFileCount INT
+);
+
+-- Cursor to iterate over each server
+DECLARE ServerCursor CURSOR FOR
+SELECT ServerName
+FROM @ServerList;
+
+OPEN ServerCursor;
+FETCH NEXT FROM ServerCursor INTO @ServerName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Construct dynamic SQL to execute on each server
+    SET @SQL = 'INSERT INTO #AgentLogHistoryRetention (ServerName, LogRetentionPeriod, LogFileSize, LogFileCount)
+                SELECT ''' + @ServerName + ''',
+                       sagentjobhistoryretention.period, 
+                       sagentjobhistoryretention.max_log_file_size, 
+                       sagentjobhistoryretention.max_log_file_count
+                FROM [' + @ServerName + '].msdb.dbo.syssubsystems AS s
+                INNER JOIN [' + @ServerName + '].msdb.dbo.msdb_sysjobs AS j
+                ON s.subsystem_id = j.subsystem
+                INNER JOIN [' + @ServerName + '].msdb.dbo.sysjobschedules AS js
+                ON j.job_id = js.job_id
+                INNER JOIN [' + @ServerName + '].msdb.dbo.sysjobs AS sj
+                ON j.job_id = sj.job_id
+                INNER JOIN [' + @ServerName + '].msdb.dbo.sagentjobhistoryretention
+                ON s.subsystem_id = sagentjobhistoryretention.subsystem_id
+                WHERE s.subsystem = ''SQL Agent'';';
+                
+    -- Execute the dynamic SQL
+    EXEC sp_executesql @SQL;
+
+    FETCH NEXT FROM ServerCursor INTO @ServerName;
+END;
+
+CLOSE ServerCursor;
+DEALLOCATE ServerCursor;
+
+-- Select the results
+SELECT *
+FROM #AgentLogHistoryRetention;
+
+-- Drop the temporary table
+DROP TABLE #AgentLogHistoryRetention;
