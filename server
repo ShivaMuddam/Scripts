@@ -1,0 +1,10 @@
+CREATE TABLE #ServerList (
+    ServerName NVARCHAR(128)
+);
+
+-- Insert your server names into the #ServerList table
+INSERT INTO #ServerList (ServerName)
+VALUES 
+('Server1'),
+('Server2'),
+('Server3'); -
