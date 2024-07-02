@@ -1,0 +1,51 @@
+SELECT server_name 
+FROM msdb.dbo.sysmanagement_shared_registered_servers_internal
+WHERE server_name IS NOT NULL;
+
+USE msdb;
+
+-- Query to check SQL Server Agent log history retention settings
+SELECT 
+    s.server_name AS ServerName,
+    sagentjobhistoryretention.period AS LogRetentionPeriod, 
+    sagentjobhistoryretention.max_log_file_size AS LogFileSize, 
+    sagentjobhistoryretention.max_log_file_count AS LogFileCount
+FROM msdb.dbo.syssubsystems AS s
+INNER JOIN msdb.dbo.msdb_sysjobs AS j ON s.subsystem_id = j.subsystem
+INNER JOIN msdb.dbo.sysjobschedules AS js ON j.job_id = js.job_id
+INNER JOIN msdb.dbo.sysjobs AS sj ON j.job_id = sj.job_id
+INNER JOIN msdb.dbo.sagentjobhistoryretention ON s.subsystem_id = sagentjobhistoryretention.subsystem_id
+WHERE s.subsystem = 'SQL Agent';
+
+DECLARE @ServerName VARCHAR(255);
+
+-- List of servers
+DECLARE ServerCursor CURSOR FOR
+SELECT server_name 
+FROM msdb.dbo.sysmanagement_shared_registered_servers_internal
+WHERE server_name IS NOT NULL;
+
+OPEN ServerCursor;
+FETCH NEXT FROM ServerCursor INTO @ServerName;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Print the query for each server
+    PRINT 'USE [' + @ServerName + '];'
+    PRINT 'SELECT '
+        + '''' + @ServerName + ''' AS ServerName,'
+        + 'sagentjobhistoryretention.period AS LogRetentionPeriod,'
+        + 'sagentjobhistoryretention.max_log_file_size AS LogFileSize,'
+        + 'sagentjobhistoryretention.max_log_file_count AS LogFileCount'
+        + ' FROM [' + @ServerName + '].msdb.dbo.syssubsystems AS s'
+        + ' INNER JOIN [' + @ServerName + '].msdb.dbo.msdb_sysjobs AS j ON s.subsystem_id = j.subsystem'
+        + ' INNER JOIN [' + @ServerName + '].msdb.dbo.sysjobschedules AS js ON j.job_id = js.job_id'
+        + ' INNER JOIN [' + @ServerName + '].msdb.dbo.sysjobs AS sj ON j.job_id = sj.job_id'
+        + ' INNER JOIN [' + @ServerName + '].msdb.dbo.sagentjobhistoryretention ON s.subsystem_id = sagentjobhistoryretention.subsystem_id'
+        + ' WHERE s.subsystem = ''SQL Agent'';';
+
+    FETCH NEXT FROM ServerCursor INTO @ServerName;
+END;
+
+CLOSE ServerCursor;
+DEALLOCATE ServerCursor;
