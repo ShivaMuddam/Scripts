@@ -1,0 +1,45 @@
+CREATE TABLE dbo.ProcedureExecutionLog (
+    LogID INT IDENTITY(1,1) PRIMARY KEY,
+    ProcedureName NVARCHAR(128),
+    StartTime DATETIME,
+    EndTime DATETIME,
+    Status NVARCHAR(50)
+);
+ALTER PROCEDURE YourStoredProcedure
+AS
+BEGIN
+    DECLARE @StartTime DATETIME = GETDATE();
+    DECLARE @EndTime DATETIME;
+    DECLARE @LogID INT;
+
+    -- Insert start log
+    INSERT INTO dbo.ProcedureExecutionLog (ProcedureName, StartTime, Status)
+    VALUES (OBJECT_NAME(@@PROCID), @StartTime, 'Started');
+
+    SET @LogID = SCOPE_IDENTITY();
+
+    BEGIN TRY
+        -- Your procedure logic goes here
+
+        -- For example:
+        -- DROP TABLE IF EXISTS #SGEI;
+        -- SELECT * INTO #SGEI FROM [stage].[GradeExtractImport_d2l];
+        -- ... (rest of your procedure logic)
+
+        -- Capture end time and update log
+        SET @EndTime = GETDATE();
+        UPDATE dbo.ProcedureExecutionLog
+        SET EndTime = @EndTime, Status = 'Completed'
+        WHERE LogID = @LogID;
+    END TRY
+    BEGIN CATCH
+        -- Capture end time and update log with error status
+        SET @EndTime = GETDATE();
+        UPDATE dbo.ProcedureExecutionLog
+        SET EndTime = @EndTime, Status = 'Failed'
+        WHERE LogID = @LogID;
+
+        -- Rethrow the error
+        THROW;
+    END CATCH
+END;
