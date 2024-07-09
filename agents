@@ -1,0 +1,42 @@
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    CASE 
+        WHEN j.enabled = 1 THEN 'Active'
+        ELSE 'Inactive'
+    END AS JobStatus,
+    j.date_created AS DateCreated,
+    l.name AS JobOwner,
+    s.name AS ScheduleName,
+    CASE 
+        WHEN s.enabled = 1 THEN 'Enabled'
+        ELSE 'Disabled'
+    END AS ScheduleStatus,
+    dp.name AS PrincipalName,
+    p.permission_name AS PermissionType,
+    p.state_desc AS PermissionState,
+    h.run_status,
+    h.run_date,
+    h.run_time,
+    h.run_duration,
+    h.sql_message_id,
+    h.sql_severity,
+    h.message
+FROM 
+    msdb.dbo.sysjobs j
+LEFT JOIN 
+    msdb.dbo.sysjobschedules js ON j.job_id = js.job_id
+LEFT JOIN 
+    msdb.dbo.sysschedules s ON js.schedule_id = s.schedule_id
+LEFT JOIN 
+    sys.syslogins l ON j.owner_sid = l.sid
+LEFT JOIN 
+    msdb.sys.database_permissions p ON j.job_id = p.major_id
+LEFT JOIN 
+    msdb.sys.database_principals dp ON p.grantee_principal_id = dp.principal_id
+LEFT JOIN 
+    msdb.dbo.sysjobhistory h ON j.job_id = h.job_id
+ORDER BY 
+    j.name, l.name;
