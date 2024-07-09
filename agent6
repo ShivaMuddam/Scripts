@@ -1,0 +1,52 @@
+USE msdb;
+GO
+
+WITH JobSchedules AS (
+    SELECT 
+        js.job_id,
+        s.name AS ScheduleName,
+        CASE 
+            WHEN s.enabled = 1 THEN 'Enabled'
+            ELSE 'Disabled'
+        END AS ScheduleStatus
+    FROM 
+        dbo.sysjobschedules js
+    LEFT JOIN 
+        dbo.sysschedules s ON js.schedule_id = s.schedule_id
+),
+JobOwners AS (
+    SELECT 
+        j.job_id,
+        l.name AS JobOwner
+    FROM 
+        dbo.sysjobs j
+    LEFT JOIN 
+        sys.syslogins l ON j.owner_sid = l.sid
+)
+SELECT 
+    j.name AS JobName,
+    CASE 
+        WHEN j.enabled = 1 THEN 'Active'
+        ELSE 'Inactive'
+    END AS JobStatus,
+    j.date_created AS DateCreated,
+    o.JobOwner,
+    js.ScheduleName,
+    js.ScheduleStatus,
+    h.run_status,
+    h.run_date,
+    h.run_time,
+    h.run_duration,
+    h.sql_message_id,
+    h.sql_severity,
+    h.message
+FROM 
+    dbo.sysjobs j
+LEFT JOIN 
+    JobSchedules js ON j.job_id = js.job_id
+LEFT JOIN 
+    JobOwners o ON j.job_id = o.job_id
+LEFT JOIN 
+    dbo.sysjobhistory h ON j.job_id = h.job_id
+ORDER BY 
+    j.name, o.JobOwner;
