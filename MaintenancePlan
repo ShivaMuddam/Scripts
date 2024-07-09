@@ -1,0 +1,68 @@
+USE msdb;
+GO
+
+WITH MaintenancePlanJobs AS (
+    SELECT 
+        mp.name AS MaintenancePlanName,
+        j.job_id,
+        j.name AS JobName,
+        j.enabled,
+        j.date_created,
+        l.name AS JobOwner,
+        js.next_run_date,
+        js.next_run_time
+    FROM 
+        dbo.sysjobs j
+    INNER JOIN 
+        dbo.sysmaintplan_subplans sp ON j.job_id = sp.job_id
+    INNER JOIN 
+        dbo.sysmaintplan_plans mp ON sp.plan_id = mp.id
+    LEFT JOIN 
+        dbo.sysjobschedules js ON j.job_id = js.job_id
+    LEFT JOIN 
+        sys.syslogins l ON j.owner_sid = l.sid
+),
+JobHistory AS (
+    SELECT 
+        jh.job_id,
+        jh.run_status,
+        jh.run_date,
+        jh.run_time,
+        jh.run_duration,
+        jh.sql_message_id,
+        jh.sql_severity,
+        jh.message,
+        ROW_NUMBER() OVER (PARTITION BY jh.job_id ORDER BY jh.run_date DESC, jh.run_time DESC) AS rn
+    FROM 
+        dbo.sysjobhistory jh
+    WHERE 
+        jh.step_id = 0 -- Get only the job outcome, not individual step details
+)
+SELECT 
+    mpj.MaintenancePlanName,
+    mpj.JobName,
+    CASE 
+        WHEN mpj.enabled = 1 THEN 'Active'
+        ELSE 'Inactive'
+    END AS JobStatus,
+    mpj.date_created AS DateCreated,
+    mpj.JobOwner,
+    jh.run_date AS LastRunDate,
+    jh.run_time AS LastRunTime,
+    jh.run_duration AS LastRunDuration,
+    CASE 
+        WHEN jh.run_status = 0 THEN 'Failed'
+        WHEN jh.run_status = 1 THEN 'Succeeded'
+        WHEN jh.run_status = 2 THEN 'Retry'
+        WHEN jh.run_status = 3 THEN 'Canceled'
+        ELSE 'Unknown'
+    END AS LastRunStatus,
+    jh.message AS LastRunMessage
+FROM 
+    MaintenancePlanJobs mpj
+LEFT JOIN 
+    JobHistory jh ON mpj.job_id = jh.job_id AND jh.rn = 1
+ORDER BY 
+    mpj.MaintenancePlanName, mpj.JobName;
+
+GO
