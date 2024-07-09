@@ -1,0 +1,344 @@
+To get information about SQL Server jobs, including their active/inactive status, creation date, owner, and schedule, you can query the system tables in the msdb database. Here is a SQL query that retrieves this information:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    CASE 
+        WHEN j.enabled = 1 THEN 'Active'
+        ELSE 'Inactive'
+    END AS JobStatus,
+    j.date_created AS DateCreated,
+    l.name AS JobOwner,
+    s.name AS ScheduleName,
+    CASE 
+        WHEN s.enabled = 1 THEN 'Enabled'
+        ELSE 'Disabled'
+    END AS ScheduleStatus,
+    s.frequency_type,
+    s.frequency_interval,
+    s.frequency_subday_type,
+    s.frequency_subday_interval,
+    s.frequency_relative_interval,
+    s.frequency_recurrence_factor,
+    s.active_start_date,
+    s.active_end_date,
+    s.active_start_time,
+    s.active_end_time
+FROM 
+    sysjobs j
+LEFT JOIN 
+    sysjobschedules js ON j.job_id = js.job_id
+LEFT JOIN 
+    sysschedules s ON js.schedule_id = s.schedule_id
+LEFT JOIN 
+    syslogins l ON j.owner_sid = l.sid
+ORDER BY 
+    j.name;
+Explanation:
+sysjobs: Contains information about jobs.
+sysjobschedules: Links jobs to their schedules.
+sysschedules: Contains information about job schedules.
+syslogins: Contains information about SQL Server logins.
+Key Columns:
+JobName: The name of the job.
+JobStatus: Indicates whether the job is active or inactive.
+DateCreated: The creation date of the job.
+JobOwner: The owner of the job.
+ScheduleName: The name of the schedule associated with the job.
+ScheduleStatus: Indicates whether the schedule is enabled or disabled.
+frequency_type, frequency_interval, frequency_subday_type, frequency_subday_interval, frequency_relative_interval, frequency_recurrence_factor, active_start_date, active_end_date, active_start_time, active_end_time: Detailed scheduling information.
+Notes:
+frequency_type, frequency_interval, and other schedule columns contain codes that indicate the type and timing of the schedule. You may need to refer to SQL Server documentation to interpret these codes fully.
+The sysjobschedules table may contain multiple entries for a single job if the job has multiple schedules.
+This query provides a comprehensive view of SQL Server Agent jobs, including their status, creation date, owner, and schedule details.
+
+Any  other information like agent setting properties and who has access to the agent jobs and there errors while running
+ChatGPT
+To get a more comprehensive overview of SQL Server Agent jobs, including agent settings, job access permissions, and error information, you need to extend your queries to include additional system tables and views. Here are a few separate queries to gather this information:
+
+1. SQL Server Agent Settings
+To retrieve SQL Server Agent settings, you can query the sys.configurations and the sys.dm_server_services DMV:
+
+sql
+Copy code
+-- SQL Server Agent settings
+SELECT
+    name,
+    value_in_use,
+    description
+FROM
+    sys.configurations
+WHERE
+    name LIKE '%agent%';
+
+-- SQL Server Agent service account and status
+SELECT 
+    servicename,
+    startup_type_desc,
+    status_desc,
+    last_startup_time,
+    service_account
+FROM 
+    sys.dm_server_services
+WHERE 
+    servicename = 'SQL Server Agent (MSSQLSERVER)';
+2. Job Access Permissions
+To retrieve information about who has access to SQL Server Agent jobs, you can query the sys.database_permissions table along with sysjobs and syslogins:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    l.name AS PrincipalName,
+    p.permission_name AS PermissionType,
+    p.state_desc AS PermissionState
+FROM 
+    sysjobs j
+JOIN 
+    sys.database_permissions p ON j.job_id = p.major_id
+JOIN 
+    sys.database_principals l ON p.grantee_principal_id = l.principal_id
+ORDER BY 
+    j.name, l.name;
+3. Job Errors and Execution History
+To retrieve job errors and execution history, you can query the sysjobhistory and sysjobs tables:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    h.run_status,
+    h.run_date,
+    h.run_time,
+    h.run_duration,
+    h.sql_message_id,
+    h.sql_severity,
+    h.message
+FROM 
+    sysjobs j
+JOIN 
+    sysjobhistory h ON j.job_id = h.job_id
+WHERE 
+    h.run_status <> 1  -- 1 indicates success, so this filters for errors
+ORDER BY 
+    j.name, h.run_date, h.run_time;
+Combining Information in a Comprehensive Query
+You can combine information about job status, creation date, owner, schedule, access permissions, and errors into a comprehensive view. Here is an example query that combines some of this information:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    CASE 
+        WHEN j.enabled = 1 THEN 'Active'
+        ELSE 'Inactive'
+    END AS JobStatus,
+    j.date_created AS DateCreated,
+    l.name AS JobOwner,
+    s.name AS ScheduleName,
+    CASE 
+        WHEN s.enabled = 1 THEN 'Enabled'
+        ELSE 'Disabled'
+    END AS ScheduleStatus,
+    l2.name AS PrincipalName,
+    p.permission_name AS PermissionType,
+    p.state_desc AS PermissionState,
+    h.run_status,
+    h.run_date,
+    h.run_time,
+    h.run_duration,
+    h.sql_message_id,
+    h.sql_severity,
+    h.message
+FROM 
+    sysjobs j
+LEFT JOIN 
+    sysjobschedules js ON j.job_id = js.job_id
+LEFT JOIN 
+    sysschedules s ON js.schedule_id = s.schedule_id
+LEFT JOIN 
+    syslogins l ON j.owner_sid = l.sid
+LEFT JOIN 
+    sys.database_permissions p ON j.job_id = p.major_id
+LEFT JOIN 
+    sys.database_principals l2 ON p.grantee_principal_id = l2.principal_id
+LEFT JOIN 
+    sysjobhistory h ON j.job_id = h.job_id
+WHERE 
+    h.run_status <> 1  -- Filter for job errors
+ORDER BY 
+    j.name, l.name;
+Explanation:
+Job and Schedule Information: This is obtained from sysjobs, sysjobschedules, and sysschedules.
+Job Owner: This is retrieved from syslogins.
+Permissions: This is joined from sys.database_permissions and sys.database_principals.
+Job History and Errors: This is joined from sysjobhistory.
+Notes:
+Permissions: Only retrieves permissions that have been explicitly granted. You might need to adjust the query to cover other permission types and scenarios.
+Errors: The run_status column in sysjobhistory indicates the job outcome, where 0 = Failed, 1 = Succeeded, 2 = Retry, and 3 = Canceled.
+This comprehensive query can help you gather detailed information about SQL Server Agent jobs, including their configuration, access permissions, and error history.
+
+SQL Server Agent settings won't  be in sys.configurations is there another query
+ChatGPT
+You're right. SQL Server Agent settings are not stored in sys.configurations. Instead, they can be found in system tables and procedures specific to SQL Server Agent. Here is a query to gather SQL Server Agent settings:
+
+SQL Server Agent Settings
+To retrieve SQL Server Agent settings, you can use the sp_help_alert and sp_help_operator stored procedures, along with querying the msdb.dbo.sysjobs table and related tables:
+
+sql
+Copy code
+USE msdb;
+GO
+
+-- Retrieve SQL Server Agent alert settings
+EXEC sp_help_alert;
+
+-- Retrieve SQL Server Agent operator settings
+EXEC sp_help_operator;
+
+-- Retrieve SQL Server Agent job settings
+SELECT 
+    sj.name AS JobName,
+    sj.enabled AS JobEnabled,
+    sj.description AS JobDescription,
+    sj.start_step_id AS StartStepID,
+    sj.category_id AS CategoryID,
+    sj.owner_sid AS OwnerSID,
+    sj.date_created AS DateCreated,
+    sj.date_modified AS DateModified,
+    s.name AS JobScheduleName,
+    CASE 
+        WHEN s.enabled = 1 THEN 'Enabled'
+        ELSE 'Disabled'
+    END AS ScheduleStatus,
+    s.freq_type AS FrequencyType,
+    s.freq_interval AS FrequencyInterval,
+    s.freq_subday_type AS FrequencySubdayType,
+    s.freq_subday_interval AS FrequencySubdayInterval,
+    s.freq_relative_interval AS FrequencyRelativeInterval,
+    s.freq_recurrence_factor AS FrequencyRecurrenceFactor,
+    s.active_start_date AS ActiveStartDate,
+    s.active_end_date AS ActiveEndDate,
+    s.active_start_time AS ActiveStartTime,
+    s.active_end_time AS ActiveEndTime
+FROM 
+    msdb.dbo.sysjobs AS sj
+LEFT JOIN 
+    msdb.dbo.sysjobschedules AS js ON sj.job_id = js.job_id
+LEFT JOIN 
+    msdb.dbo.sysschedules AS s ON js.schedule_id = s.schedule_id;
+Access Permissions
+To retrieve information about who has access to SQL Server Agent jobs, you can query the sys.database_permissions table along with sysjobs and syslogins:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    l.name AS PrincipalName,
+    p.permission_name AS PermissionType,
+    p.state_desc AS PermissionState
+FROM 
+    msdb.dbo.sysjobs j
+JOIN 
+    sys.database_permissions p ON j.job_id = p.major_id
+JOIN 
+    sys.database_principals l ON p.grantee_principal_id = l.principal_id
+ORDER BY 
+    j.name, l.name;
+Job Errors and Execution History
+To retrieve job errors and execution history, you can query the sysjobhistory and sysjobs tables:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    h.run_status,
+    h.run_date,
+    h.run_time,
+    h.run_duration,
+    h.sql_message_id,
+    h.sql_severity,
+    h.message
+FROM 
+    msdb.dbo.sysjobs j
+JOIN 
+    msdb.dbo.sysjobhistory h ON j.job_id = h.job_id
+WHERE 
+    h.run_status <> 1  -- 1 indicates success, so this filters for errors
+ORDER BY 
+    j.name, h.run_date, h.run_time;
+Comprehensive Query
+Combining the information about job status, creation date, owner, schedule, access permissions, and errors into a comprehensive view:
+
+sql
+Copy code
+USE msdb;
+GO
+
+SELECT 
+    j.name AS JobName,
+    CASE 
+        WHEN j.enabled = 1 THEN 'Active'
+        ELSE 'Inactive'
+    END AS JobStatus,
+    j.date_created AS DateCreated,
+    l.name AS JobOwner,
+    s.name AS ScheduleName,
+    CASE 
+        WHEN s.enabled = 1 THEN 'Enabled'
+        ELSE 'Disabled'
+    END AS ScheduleStatus,
+    l2.name AS PrincipalName,
+    p.permission_name AS PermissionType,
+    p.state_desc AS PermissionState,
+    h.run_status,
+    h.run_date,
+    h.run_time,
+    h.run_duration,
+    h.sql_message_id,
+    h.sql_severity,
+    h.message
+FROM 
+    msdb.dbo.sysjobs j
+LEFT JOIN 
+    msdb.dbo.sysjobschedules js ON j.job_id = js.job_id
+LEFT JOIN 
+    msdb.dbo.sysschedules s ON js.schedule_id = s.schedule_id
+LEFT JOIN 
+    syslogins l ON j.owner_sid = l.sid
+LEFT JOIN 
+    sys.database_permissions p ON j.job_id = p.major_id
+LEFT JOIN 
+    sys.database_principals l2 ON p.grantee_principal_id = l2.principal_id
+LEFT JOIN 
+    msdb.dbo.sysjobhistory h ON j.job_id = h.job_id
+WHERE 
+    h.run_status <> 1  -- Filter for job errors
+ORDER BY 
+    j.name, l.name;
+Explanation:
+SQL Server Agent Settings: Gathered using sp_help_alert and sp_help_operator for alerts and operators respectively.
+Job and Schedule Information: Retrieved from sysjobs, sysjobschedules, and sysschedules.
+Job Owner: Retrieved from syslogins.
+Permissions: Joined from sys.database_permissions and sys.database_principals.
+Job History and Errors: Joined from sysjobhistory.
+By running these queries, you can get a detailed view of SQL Server Agent settings, job configurations, access permissions, and error history.
