@@ -1,0 +1,157 @@
+-- Create or alter the stored procedure
+CREATE OR ALTER PROCEDURE usp_ProcessGradeExtractImport
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @StartTime DATETIME, @EndTime DATETIME;
+    DECLARE @Duration_InsertDuplicates INT, @Duration_UpdateStatsTempTable INT, @Duration_CreateIndexTempTable INT, @Duration_UpdateStatsDuplicates INT, @Duration_Merge INT, @Duration_DeleteDuplicates INT;
+    
+    -- Step 1: Drop the temporary table if it exists
+    IF OBJECT_ID('tempdb..#SGEI') IS NOT NULL
+        DROP TABLE #SGEI;
+    
+    -- Step 2: Import the GradeExtractImport_d2l into temp table #SGEI
+    SET @StartTime = GETDATE();
+    SELECT *
+    INTO #SGEI
+    FROM [stage].[GradeExtractImport_d2l];
+    SET @EndTime = GETDATE();
+    SET @Duration_InsertDuplicates = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Step 3: Update statistics on the temporary table #SGEI
+    SET @StartTime = GETDATE();
+    UPDATE STATISTICS #SGEI;
+    SET @EndTime = GETDATE();
+    SET @Duration_UpdateStatsTempTable = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Step 4: Create index on the temporary table for better performance
+    SET @StartTime = GETDATE();
+    CREATE INDEX idx_SGEI_UserPK1_CoursePK1_AssignmentPK1_MembershipPK1_GradePK1 
+    ON #SGEI ([UserPK1], [CoursePK1], [AssignmentPK1], [MembershipPK1], [GradePK1]);
+    SET @EndTime = GETDATE();
+    SET @Duration_CreateIndexTempTable = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Step 5: Create index on the ODS_Duplicates table if it doesn't already exist
+    SET @StartTime = GETDATE();
+    IF NOT EXISTS (
+        SELECT * 
+        FROM sys.indexes 
+        WHERE object_id = OBJECT_ID('Stage.ODS_Duplicates') 
+        AND name = 'idx_ODS_Duplicates_ProcessedOn_PK1')
+    BEGIN
+        CREATE INDEX idx_ODS_Duplicates_ProcessedOn_PK1 
+        ON Stage.ODS_Duplicates ([PROCCESED_ON], [PK1]);
+    END
+    SET @EndTime = GETDATE();
+    SET @Duration_UpdateStatsDuplicates = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Step 6: Insert duplicates into the error table Stage.ODS_Duplicates
+    SET @StartTime = GETDATE();
+    WITH cte AS (
+        SELECT *, 
+               ROW_NUMBER() OVER (
+                   PARTITION BY [UserPK1], [CoursePK1], [AssignmentPK1], [MembershipPK1], [GradePK1] 
+                   ORDER BY (SELECT NULL)
+               ) AS rn
+        FROM #SGEI
+    )
+    INSERT INTO Stage.ODS_Duplicates (PrimaryKey, STEP_FAILED_ON, PROCCESED_ON)
+    SELECT [PK1] AS PrimaryKey, 
+           'Grade_Merge' AS STEP_FAILED_ON, 
+           CONVERT(DATE, GETDATE()) AS PROCCESED_ON
+    FROM cte
+    WHERE cte.rn > 1;
+    SET @EndTime = GETDATE();
+    SET @Duration_Merge = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Step 7: Delete duplicates from the temporary table #SGEI
+    SET @StartTime = GETDATE();
+    DELETE FROM #SGEI
+    WHERE EXISTS (
+        SELECT 1
+        FROM Stage.ODS_Duplicates d
+        WHERE d.PROCCESED_ON = CONVERT(DATE, GETDATE())
+        AND d.PK1 = #SGEI.PK1
+    );
+    SET @EndTime = GETDATE();
+    SET @Duration_DeleteDuplicates = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Step 8: Merge data into the target table Stage.GradeExtractImport
+    SET @StartTime = GETDATE();
+    WITH GEICTE AS (
+        SELECT [UserPK1], [UserEPK], [UserLastName], [UserFirstName], [UserUserId], 
+               [CoursePK1], [CourseEPK], [CourseCourseId], [CourseTitle], [MembershipPK1], 
+               [AssignmentPK1], [AssignmentIsExternalGradeIndicator], [AssignmentDisplayColumnName], 
+               [AssignmentPointsPossible], [AssignmentDisplayTitle], [GradePK1], [GradeAttemptDate], 
+               [GradeAttemptStatus], [GradeManualGrade], [GradeManualScore], [GradeDisplayGrade], 
+               [GradeDisplayScore], [GradeExemptIndicator], [GradeOverrideDate], [SourceSystem]
+        FROM [stage].[GradeExtractImport]
+        WHERE [SourceSystem] = 'D2L'
+    )
+    MERGE INTO GEICTE AS target
+    USING #SGEI AS source
+    ON ISNULL(source.[UserPK1], '') = ISNULL(target.[UserPK1], '')
+       AND ISNULL(source.[CoursePK1], '') = ISNULL(target.[CoursePK1], '')
+       AND ISNULL(source.[AssignmentPK1], '') = ISNULL(target.[AssignmentPK1], '')
+       AND ISNULL(source.[MembershipPk1], '') = ISNULL(target.[MembershipPk1], '')
+       AND ISNULL(source.[GradePK1], '') = ISNULL(target.[GradePK1], '')
+    WHEN MATCHED
+       AND NOT EXISTS (
+           SELECT source.[UserEPK], source.[UserLastName], source.[UserFirstName], source.[UserUserId], 
+                  source.[CourseEPK], source.[CourseCourseId], source.[CourseTitle], 
+                  source.[AssignmentIsExternalGradeIndicator], source.[AssignmentDisplayColumnName], 
+                  source.[AssignmentPointsPossible], source.[AssignmentDisplayTitle], source.[GradeAttemptDate], 
+                  source.[GradeAttemptStatus], source.[GradeManualGrade], source.[GradeManualScore], 
+                  source.[GradeDisplayGrade], source.[GradeDisplayScore], source.[GradeExemptIndicator], 
+                  source.[GradeOverrideDate], source.[SourceSystem]
+           INTERSECT
+           SELECT target.[UserEPK], target.[UserLastName], target.[UserFirstName], target.[UserUserId], 
+                  target.[CourseEPK], target.[CourseCourseId], target.[CourseTitle], 
+                  target.[AssignmentIsExternalGradeIndicator], target.[AssignmentDisplayColumnName], 
+                  target.[AssignmentPointsPossible], target.[AssignmentDisplayTitle], target.[GradeAttemptDate], 
+                  target.[GradeAttemptStatus], target.[GradeManualGrade], target.[GradeManualScore], 
+                  target.[GradeDisplayGrade], target.[GradeDisplayScore], target.[GradeExemptIndicator], 
+                  target.[GradeOverrideDate], target.[SourceSystem]
+       )
+       THEN
+           UPDATE SET [UserEPK] = source.[UserEPK], [UserLastName] = source.[UserLastName], 
+                      [UserFirstName] = source.[UserFirstName], [UserUserId] = source.[UserUserId], 
+                      [CourseEPK] = source.[CourseEPK], [CourseCourseId] = source.[CourseCourseId], 
+                      [CourseTitle] = source.[CourseTitle], [AssignmentIsExternalGradeIndicator] = source.[AssignmentIsExternalGradeIndicator], 
+                      [AssignmentDisplayColumnName] = source.[AssignmentDisplayColumnName], 
+                      [AssignmentPointsPossible] = source.[AssignmentPointsPossible], 
+                      [AssignmentDisplayTitle] = source.[AssignmentDisplayTitle], [GradeAttemptDate] = source.[GradeAttemptDate], 
+                      [GradeAttemptStatus] = source.[GradeAttemptStatus], [GradeManualGrade] = source.[GradeManualGrade], 
+                      [GradeManualScore] = source.[GradeManualScore], [GradeDisplayGrade] = source.[GradeDisplayGrade], 
+                      [GradeDisplayScore] = source.[GradeDisplayScore], [GradeExemptIndicator] = source.[GradeExemptIndicator], 
+                      [GradeOverrideDate] = source.[GradeOverrideDate], [SourceSystem] = source.[SourceSystem]
+    WHEN NOT MATCHED
+    THEN
+        INSERT ([UserPK1], [UserEPK], [UserLastName], [UserFirstName], [UserUserId], 
+                [CoursePK1], [CourseEPK], [CourseCourseId], [CourseTitle], [MembershipPK1], 
+                [AssignmentPK1], [AssignmentIsExternalGradeIndicator], [AssignmentDisplayColumnName], 
+                [AssignmentPointsPossible], [AssignmentDisplayTitle], [GradePK1], [GradeAttemptDate], 
+                [GradeAttemptStatus], [GradeManualGrade], [GradeManualScore], [GradeDisplayGrade], 
+                [GradeDisplayScore], [GradeExemptIndicator], [GradeOverrideDate], [SourceSystem])
+        VALUES (source.[UserPK1], source.[UserEPK], source.[UserLastName], source.[UserFirstName], 
+                source.[UserUserId], source.[CoursePK1], source.[CourseEPK], source.[CourseCourseId], 
+                source.[CourseTitle], source.[MembershipPK1], source.[AssignmentPK1], 
+                source.[AssignmentIsExternalGradeIndicator], source.[AssignmentDisplayColumnName], 
+                source.[AssignmentPointsPossible], source.[AssignmentDisplayTitle], source.[GradePK1], 
+                source.[GradeAttemptDate], source.[GradeAttemptStatus], source.[GradeManualGrade], 
+                source.[GradeManualScore], source.[GradeDisplayGrade], source.[GradeDisplayScore], 
+                source.[GradeExemptIndicator], source.[GradeOverrideDate], source.[SourceSystem])
+    WHEN NOT MATCHED BY SOURCE
+    THEN DELETE;
+    SET @EndTime = GETDATE();
+    SET @Duration_Merge = DATEDIFF(MILLISECOND, @StartTime, @EndTime);
+    
+    -- Output execution times
+    SELECT @Duration_InsertDuplicates AS Duration_InsertDuplicates,
+           @Duration_UpdateStatsTempTable AS Duration_UpdateStatsTempTable,
+           @Duration_CreateIndexTempTable AS Duration_CreateIndexTempTable,
+           @Duration_UpdateStatsDuplicates AS Duration_UpdateStatsDuplicates,
+           @Duration_Merge AS Duration_Merge,
+           @Duration_DeleteDuplicates AS Duration_DeleteDuplicates;
+END
