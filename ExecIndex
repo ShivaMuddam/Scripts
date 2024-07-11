@@ -1,0 +1,11 @@
+EXEC dbo.DropSpecificIndex
+    @SchemaName = 'dbo',
+    @TableName = 'YourTableName',
+    @IndexName = 'YourIndexName';
+
+EXEC dbo.CreateIncludeIndex 
+    @SchemaName = 'dbo', 
+    @TableName = 'MyTable', 
+    @IndexName = 'IX_MyTable_Column1', 
+    @Column = 'Column1', 
+    @IncludeColumns = 'Column2, Column3'
