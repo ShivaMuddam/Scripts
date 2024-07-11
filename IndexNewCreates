@@ -1,0 +1,41 @@
+CREATE PROCEDURE dbo.CreateIncludeIndex
+    @SchemaName NVARCHAR(128),
+    @TableName NVARCHAR(128),
+    @IndexName NVARCHAR(128),
+    @Column NVARCHAR(MAX),  -- Column to index
+    @IncludeColumns NVARCHAR(MAX) = NULL  -- Comma-separated list of columns to include
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @SQL NVARCHAR(MAX);
+    DECLARE @IndexColumns NVARCHAR(MAX);
+
+    -- Remove any spaces around the comma-separated columns
+    SET @Column = REPLACE(@Column, ' ', '');
+    SET @IncludeColumns = REPLACE(@IncludeColumns, ' ', '');
+
+    -- Construct the column part of the CREATE INDEX statement
+    SET @IndexColumns = @Column;
+
+    -- Construct the CREATE INDEX statement
+    SET @SQL = 'CREATE NONCLUSTERED INDEX ' + QUOTENAME(@IndexName) + 
+               ' ON ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) +
+               ' (' + @IndexColumns + ')';
+
+    -- Append INCLUDE clause if @IncludeColumns is provided and not empty
+    IF @IncludeColumns IS NOT NULL AND @IncludeColumns <> ''
+    BEGIN
+        SET @SQL = @SQL + ' INCLUDE (' + @IncludeColumns + ')';
+    END
+
+    -- Append index options
+    SET @SQL = @SQL + ' WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ' +
+                     '       ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF)';
+
+    -- Execute the SQL statement
+    EXEC sp_executesql @SQL;
+
+    PRINT 'Index ' + @IndexName + ' created on ' + @SchemaName + '.' + @TableName;
+END
+GO
