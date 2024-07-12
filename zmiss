@@ -1,0 +1,77 @@
+CREATE PROCEDURE dbo.GenerateIndexScripts
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Script NVARCHAR(MAX);
+
+    -- Generate scripts for missing indexes and drop duplicate indexes
+    SELECT @Script = 
+        ISNULL(@Script + CHAR(13) + CHAR(10) + 'GO' + CHAR(13) + CHAR(10), '') +
+        CASE 
+            WHEN ScriptType = 'CREATE' THEN 
+                'CREATE ' + ix.type_desc + ' INDEX ' + QUOTENAME(ix.name) + ' ON ' + QUOTENAME(sch.name) + '.' + QUOTENAME(tab.name) + ' ('
+                + ISNULL(STRING_AGG(QUOTENAME(col.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END, ', '), '') WITHIN GROUP (ORDER BY ic.key_ordinal)
+                + ')'
+                + ISNULL(' INCLUDE (' + STRING_AGG(QUOTENAME(inc_col.name), ', ') WITHIN GROUP (ORDER BY inc_col.index_column_id) + ')', '') + ';'
+            WHEN ScriptType = 'DROP' THEN
+                'IF EXISTS (SELECT * FROM sys.indexes WHERE object_id = OBJECT_ID(''[' + sch.name + '].[' + tab.name + ']'') AND name = ''' + ix.name + ''') ' +
+                'DROP INDEX ' + QUOTENAME(ix.name) + ' ON ' + QUOTENAME(sch.name) + '.' + QUOTENAME(tab.name) + ';'
+            ELSE ''
+        END
+    FROM (
+        -- Subquery to select both CREATE and DROP scripts
+        SELECT 
+            'CREATE' AS ScriptType,
+            tab.name,
+            sch.name,
+            ix.name,
+            ix.type_desc,
+            STRING_AGG(QUOTENAME(col.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) AS Columns,
+            STRING_AGG(QUOTENAME(inc_col.name), ', ') WITHIN GROUP (ORDER BY inc_col.index_column_id) AS IncludeColumns
+        FROM sys.indexes ix
+        INNER JOIN sys.tables tab ON ix.object_id = tab.object_id
+        INNER JOIN sys.schemas sch ON tab.schema_id = sch.schema_id
+        LEFT JOIN sys.index_columns ic ON ix.object_id = ic.object_id AND ix.index_id = ic.index_id AND ic.index_column_id > 0
+        LEFT JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
+        LEFT JOIN sys.columns inc_col ON ix.object_id = inc_col.object_id AND ic.column_id = inc_col.column_id
+        WHERE ix.is_primary_key = 0 -- Exclude primary keys
+        AND ix.is_unique_constraint = 0 -- Exclude unique constraints
+        AND ix.is_disabled = 0 -- Exclude disabled indexes
+        AND ix.is_hypothetical = 0 -- Exclude hypothetical indexes
+        AND ix.name IS NOT NULL
+        GROUP BY ix.object_id, ix.index_id, ix.name, ix.type_desc, sch.name, tab.name
+
+        UNION ALL
+
+        SELECT 
+            'DROP' AS ScriptType,
+            tab.name,
+            sch.name,
+            ix.name,
+            ix.type_desc,
+            NULL AS Columns,
+            NULL AS IncludeColumns
+        FROM (
+            SELECT 
+                tab.name,
+                sch.name,
+                ix.name,
+                ROW_NUMBER() OVER (PARTITION BY tab.name, sch.name, ix.name ORDER BY ix.type_desc) AS rn
+            FROM sys.indexes ix
+            INNER JOIN sys.tables tab ON ix.object_id = tab.object_id
+            INNER JOIN sys.schemas sch ON tab.schema_id = sch.schema_id
+            WHERE ix.is_primary_key = 0 -- Exclude primary keys
+            AND ix.is_unique_constraint = 0 -- Exclude unique constraints
+            AND ix.is_disabled = 0 -- Exclude disabled indexes
+            AND ix.is_hypothetical = 0 -- Exclude hypothetical indexes
+            AND ix.name IS NOT NULL
+        ) AS duplicates
+        WHERE rn > 1
+    ) AS Scripts
+    ORDER BY ScriptType, sch.name, tab.name, ix.name;
+
+    -- Print the final script
+    PRINT @Script;
+END;
+GO
