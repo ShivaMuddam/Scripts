@@ -1,0 +1,103 @@
+-- Create the temporary table #SGEI with appropriate indexes
+CREATE TABLE #SGEI (
+    -- Define columns based on GradeExtractImport_d2l structure
+    -- Adjust data types as per your actual table structure
+    UserPK1 INT,
+    CoursePK1 INT,
+    AssignmentPK1 INT,
+    MembershipPK1 INT,
+    GradePK1 INT,
+    PK1 INT, -- Assuming PK1 is the primary key or unique identifier
+    -- Add more columns as needed
+    CONSTRAINT PK_SGEI PRIMARY KEY CLUSTERED (PK1) -- Primary key constraint
+);
+
+-- Create index for the ROW_NUMBER() function
+CREATE NONCLUSTERED INDEX IX_SGEI_Partitioning
+ON #SGEI (UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1);
+
+-- Insert data into #SGEI from GradeExtractImport_d2l
+INSERT INTO #SGEI (UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1, PK1)
+SELECT UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1, PK1
+FROM [stage].[GradeExtractImport_d2l];
+
+-- Insert duplicates into Stage.ODS_Duplicates using CTE
+;WITH cte AS (
+    SELECT *,
+           ROW_NUMBER() OVER(PARTITION BY UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1 ORDER BY (SELECT NULL)) AS rn
+    FROM #SGEI
+)
+INSERT INTO Stage.ODS_Duplicates (PrimaryKey, STEP_FAILED_ON, PROCCESED_ON)
+SELECT PK1 AS PrimaryKey,
+       'Grade_Merge' AS STEP_FAILED_ON,
+       CONVERT(DATE, GETDATE()) AS PROCCESED_ON
+FROM cte
+WHERE rn > 1;
+
+-- Drop the temporary table after use
+DROP TABLE #SGEI;
+CREATE PROCEDURE dbo.HandleGradeExtractImport
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @BatchSize INT = 10000; -- Adjust batch size as needed
+    DECLARE @Offset INT = 0;
+    DECLARE @TotalRows INT;
+
+    -- Drop the temporary table if it already exists
+    IF OBJECT_ID('tempdb..#SGEI') IS NOT NULL
+        DROP TABLE #SGEI;
+
+    -- Create the temporary table #SGEI with appropriate indexes
+    CREATE TABLE #SGEI (
+        UserPK1 INT,
+        CoursePK1 INT,
+        AssignmentPK1 INT,
+        MembershipPK1 INT,
+        GradePK1 INT,
+        PK1 INT PRIMARY KEY CLUSTERED -- Assuming PK1 is the primary key or unique identifier
+        -- Add more columns as needed, with appropriate data types
+    );
+
+    -- Create index for the ROW_NUMBER() function
+    CREATE NONCLUSTERED INDEX IX_SGEI_Partitioning
+    ON #SGEI (UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1);
+
+    -- Get the total number of rows to be processed
+    SELECT @TotalRows = COUNT(*)
+    FROM [stage].[GradeExtractImport_d2l];
+
+    WHILE @Offset < @TotalRows
+    BEGIN
+        -- Insert data into #SGEI in batches
+        INSERT INTO #SGEI (UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1, PK1)
+        SELECT UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1, PK1
+        FROM [stage].[GradeExtractImport_d2l]
+        ORDER BY PK1
+        OFFSET @Offset ROWS FETCH NEXT @BatchSize ROWS ONLY;
+
+        -- Insert duplicates into Stage.ODS_Duplicates using CTE
+        ;WITH cte AS (
+            SELECT *,
+                   ROW_NUMBER() OVER(PARTITION BY UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1 ORDER BY (SELECT NULL)) AS rn
+            FROM #SGEI
+        )
+        INSERT INTO Stage.ODS_Duplicates (PrimaryKey, STEP_FAILED_ON, PROCCESED_ON)
+        SELECT PK1 AS PrimaryKey,
+               'Grade_Merge' AS STEP_FAILED_ON,
+               CONVERT(DATE, GETDATE()) AS PROCCESED_ON
+        FROM cte
+        WHERE rn > 1;
+
+        -- Clear the temporary table for the next batch
+        DELETE FROM #SGEI;
+
+        -- Increment the offset for the next batch
+        SET @Offset = @Offset + @BatchSize;
+    END;
+
+    -- Drop the temporary table after use
+    DROP TABLE #SGEI;
+END;
+GO
