@@ -1,0 +1,64 @@
+DECLARE @SchemaName NVARCHAR(128)
+DECLARE @TableName NVARCHAR(128)
+DECLARE @IndexName NVARCHAR(128)
+DECLARE @IndexType NVARCHAR(128)
+DECLARE @Column NVARCHAR(MAX)
+DECLARE @IncludeColumns NVARCHAR(MAX)
+
+DECLARE @IndexScript NVARCHAR(MAX)
+
+DECLARE cur CURSOR FOR
+SELECT 
+    ISNULL(s.name, '') AS SchemaName,
+    ISNULL(t.name, '') AS TableName,
+    ISNULL(i.name, '') AS IndexName,
+    ISNULL(CASE 
+        WHEN i.is_primary_key = 1 THEN 'PRIMARY KEY'
+        WHEN i.is_unique = 1 THEN 'UNIQUE'
+        WHEN i.type = 1 THEN 'CLUSTERED'
+        WHEN i.type = 2 THEN 'NONCLUSTERED'
+        ELSE 'OTHER'
+    END, '') AS IndexType,
+    ISNULL(STUFF((
+        SELECT ', ' + ISNULL(c.name, '')
+        FROM sys.index_columns ic
+        JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
+        FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 2, ''), '') AS Columns,
+    ISNULL(STUFF((
+        SELECT ', ' + ISNULL(c.name, '')
+        FROM sys.index_columns ic
+        JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 1
+        FOR XML PATH(''), TYPE
+    ).value('.', 'NVARCHAR(MAX)'), 1, 2, ''), '') AS IncludeColumns
+FROM 
+    sys.indexes i
+    JOIN sys.tables t ON i.object_id = t.object_id
+    JOIN sys.schemas s ON t.schema_id = s.schema_id
+WHERE 
+    i.type IN (1, 2) -- 1 = CLUSTERED, 2 = NONCLUSTERED
+ORDER BY 
+    s.name, t.name, i.name
+
+OPEN cur
+FETCH NEXT FROM cur INTO @SchemaName, @TableName, @IndexName, @IndexType, @Column, @IncludeColumns
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @IndexScript = 'EXEC dbo.CreateIncludeIndex 
+    @SchemaName = ''' + ISNULL(@SchemaName, '') + ''', 
+    @TableName = ''' + ISNULL(@TableName, '') + ''', 
+    @IndexName = ''' + ISNULL(@IndexName, '') + ''', 
+    @IndexType = ''' + ISNULL(@IndexType, '') + ''', 
+    @Column = ''' + ISNULL(@Column, '') + ''', 
+    @IncludeColumns = ''' + ISNULL(@IncludeColumns, '') + ''';'
+    
+    PRINT @IndexScript
+    
+    FETCH NEXT FROM cur INTO @SchemaName, @TableName, @IndexName, @IndexType, @Column, @IncludeColumns
+END
+
+CLOSE cur
+DEALLOCATE cur
