@@ -1,0 +1,130 @@
+CREATE PROCEDURE usp_ProcessGradeExtractImport
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Drop the temporary table if it already exists
+    IF OBJECT_ID('tempdb..#SGEI') IS NOT NULL
+        DROP TABLE #SGEI;
+
+    -- Import the GradeExtractImport into temp table #SGEI
+    SELECT *
+    INTO #SGEI
+    FROM [stage].[GradeExtractImport_d2l];
+
+    -- Update statistics on the temporary table
+    UPDATE STATISTICS #SGEI;
+
+    -- Create index on the temporary table for better performance
+    CREATE INDEX idx_SGEI_UserPK1_CoursePK1_AssignmentPK1_MembershipPK1_GradePK1 
+    ON #SGEI ([UserPK1], [CoursePK1], [AssignmentPK1], [MembershipPK1], [GradePK1]);
+
+    -- Create index on the Stage.ODS_Duplicates table if it doesn't already exist
+    IF NOT EXISTS (
+        SELECT * 
+        FROM sys.indexes 
+        WHERE object_id = OBJECT_ID('Stage.ODS_Duplicates') 
+        AND name = 'idx_ODS_Duplicates_ProcessedOn_PK1')
+    BEGIN
+        CREATE INDEX idx_ODS_Duplicates_ProcessedOn_PK1 
+        ON Stage.ODS_Duplicates ([PROCCESED_ON], [PK1]);
+    END
+
+    -- Update statistics on the Stage.ODS_Duplicates table
+    UPDATE STATISTICS Stage.ODS_Duplicates;
+
+    -- Insert duplicates into the error table
+    WITH cte AS (
+        SELECT *, 
+               ROW_NUMBER() OVER (
+                   PARTITION BY [UserPK1], [CoursePK1], [AssignmentPK1], [MembershipPK1], [GradePK1] 
+                   ORDER BY (SELECT NULL)
+               ) AS rn
+        FROM #SGEI
+    )
+    INSERT INTO Stage.ODS_Duplicates (PrimaryKey, STEP_FAILED_ON, PROCCESED_ON)
+    SELECT [PK1] AS PrimaryKey, 
+           'Grade_Merge' AS STEP_FAILED_ON, 
+           CONVERT(DATE, GETDATE()) AS PROCCESED_ON
+    FROM cte
+    WHERE cte.rn > 1;
+
+    -- Delete duplicates from the temporary table
+    DELETE FROM #SGEI
+    WHERE EXISTS (
+        SELECT 1
+        FROM Stage.ODS_Duplicates d
+        WHERE d.PROCCESED_ON = CONVERT(DATE, GETDATE())
+        AND d.PK1 = #SGEI.PK1
+    );
+
+    -- Merge data into the target table
+    -- Perform UPDATEs first
+    UPDATE tgt
+    SET tgt.[UserEPK] = src.[UserEPK], 
+        tgt.[UserLastName] = src.[UserLastName], 
+        tgt.[UserFirstName] = src.[UserFirstName], 
+        tgt.[UserUserId] = src.[UserUserId], 
+        tgt.[CourseEPK] = src.[CourseEPK], 
+        tgt.[CourseCourseId] = src.[CourseCourseId], 
+        tgt.[CourseTitle] = src.[CourseTitle], 
+        tgt.[AssignmentIsExternalGradeIndicator] = src.[AssignmentIsExternalGradeIndicator], 
+        tgt.[AssignmentDisplayColumnName] = src.[AssignmentDisplayColumnName], 
+        tgt.[AssignmentPointsPossible] = src.[AssignmentPointsPossible], 
+        tgt.[AssignmentDisplayTitle] = src.[AssignmentDisplayTitle], 
+        tgt.[GradeAttemptDate] = src.[GradeAttemptDate], 
+        tgt.[GradeAttemptStatus] = src.[GradeAttemptStatus], 
+        tgt.[GradeManualGrade] = src.[GradeManualGrade], 
+        tgt.[GradeManualScore] = src.[GradeManualScore], 
+        tgt.[GradeDisplayGrade] = src.[GradeDisplayGrade], 
+        tgt.[GradeDisplayScore] = src.[GradeDisplayScore], 
+        tgt.[GradeExemptIndicator] = src.[GradeExemptIndicator], 
+        tgt.[GradeOverrideDate] = src.[GradeOverrideDate], 
+        tgt.[SourceSystem] = src.[SourceSystem]
+    FROM [stage].[GradeExtractImport] AS tgt
+    JOIN #SGEI AS src
+    ON ISNULL(src.[UserPK1], '') = ISNULL(tgt.[UserPK1], '')
+       AND ISNULL(src.[CoursePK1], '') = ISNULL(tgt.[CoursePK1], '')
+       AND ISNULL(src.[AssignmentPK1], '') = ISNULL(tgt.[AssignmentPK1], '')
+       AND ISNULL(src.[MembershipPk1], '') = ISNULL(tgt.[MembershipPK1], '')
+       AND ISNULL(src.[GradePK1], '') = ISNULL(tgt.[GradePK1], '');
+
+    -- Perform INSERTs for new records
+    INSERT INTO [stage].[GradeExtractImport] ([UserPK1], [UserEPK], [UserLastName], [UserFirstName], [UserUserId], 
+                                              [CoursePK1], [CourseEPK], [CourseCourseId], [CourseTitle], [MembershipPK1], 
+                                              [AssignmentPK1], [AssignmentIsExternalGradeIndicator], [AssignmentDisplayColumnName], 
+                                              [AssignmentPointsPossible], [AssignmentDisplayTitle], [GradePK1], [GradeAttemptDate], 
+                                              [GradeAttemptStatus], [GradeManualGrade], [GradeManualScore], [GradeDisplayGrade], 
+                                              [GradeDisplayScore], [GradeExemptIndicator], [GradeOverrideDate], [SourceSystem])
+    SELECT src.[UserPK1], src.[UserEPK], src.[UserLastName], src.[UserFirstName], src.[UserUserId], 
+           src.[CoursePK1], src.[CourseEPK], src.[CourseCourseId], src.[CourseTitle], src.[MembershipPK1], 
+           src.[AssignmentPK1], src.[AssignmentIsExternalGradeIndicator], src.[AssignmentDisplayColumnName], 
+           src.[AssignmentPointsPossible], src.[AssignmentDisplayTitle], src.[GradePK1], src.[GradeAttemptDate], 
+           src.[GradeAttemptStatus], src.[GradeManualGrade], src.[GradeManualScore], src.[GradeDisplayGrade], 
+           src.[GradeDisplayScore], src.[GradeExemptIndicator], src.[GradeOverrideDate], src.[SourceSystem]
+    FROM #SGEI AS src
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM [stage].[GradeExtractImport] AS tgt
+        WHERE tgt.[UserPK1] = src.[UserPK1]
+          AND tgt.[CoursePK1] = src.[CoursePK1]
+          AND tgt.[AssignmentPK1] = src.[AssignmentPK1]
+          AND tgt.[MembershipPK1] = src.[MembershipPK1]
+          AND tgt.[GradePK1] = src.[GradePK1]
+    );
+
+    -- Perform DELETEs for records not in source
+    DELETE tgt
+    FROM [stage].[GradeExtractImport] AS tgt
+    LEFT JOIN #SGEI AS src
+    ON tgt.[UserPK1] = src.[UserPK1]
+       AND tgt.[CoursePK1] = src.[CoursePK1]
+       AND tgt.[AssignmentPK1] = src.[AssignmentPK1]
+       AND tgt.[MembershipPK1] = src.[MembershipPK1]
+       AND tgt.[GradePK1] = src.[GradePK1]
+    WHERE src.[UserPK1] IS NULL;
+
+    -- Drop the temporary table after processing
+    DROP TABLE #SGEI;
+
+END
