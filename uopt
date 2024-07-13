@@ -1,0 +1,60 @@
+DECLARE @BatchSize INT = 1000;
+DECLARE @RowsAffected INT;
+
+-- Process the first update query in batches
+SET @RowsAffected = 1;
+WHILE @RowsAffected > 0
+BEGIN
+    UPDATE TOP (@BatchSize) stage.GradeExtractImport WITH (ROWLOCK)
+    SET AssignmentDisplayColumnName = REPLACE(AssignmentDisplayColumnName, 'Assessment', 'Test'),
+        AssignmentDisplayTitle = REPLACE(AssignmentDisplayTitle, 'Assessment', 'Test')
+    WHERE AssignmentDisplayColumnName LIKE '%Assessment%'
+          OR AssignmentDisplayTitle LIKE '%Assessment%';
+          
+    SET @RowsAffected = @@ROWCOUNT;
+END
+
+-- Process the second update query in batches
+SET @RowsAffected = 1;
+WHILE @RowsAffected > 0
+BEGIN
+    UPDATE TOP (@BatchSize) stage.GradeExtractImport WITH (ROWLOCK)
+    SET AssignmentDisplayColumnName = REPLACE(AssignmentDisplayColumnName, 'Interactive', 'Module'),
+        AssignmentDisplayTitle = REPLACE(AssignmentDisplayTitle, 'Interactive', 'Module')
+    WHERE AssignmentDisplayColumnName LIKE '%Interactive%'
+          OR AssignmentDisplayTitle LIKE '%Interactive%';
+          
+    SET @RowsAffected = @@ROWCOUNT;
+END
+
+-- Process the third update query in batches
+SET @RowsAffected = 1;
+WHILE @RowsAffected > 0
+BEGIN
+    UPDATE TOP (@BatchSize) stage.GradeExtractImport WITH (ROWLOCK)
+    SET GradeDisplayGrade = CAST(GradeDisplayScore AS VARCHAR(50)) + '0'
+    WHERE GradeDisplayGrade = 'Complete';
+          
+    SET @RowsAffected = @@ROWCOUNT;
+END
+-- Enable row locks and optimize the first update query
+UPDATE stage.GradeExtractImport WITH (ROWLOCK)
+SET AssignmentDisplayColumnName = REPLACE(AssignmentDisplayColumnName, 'Assessment', 'Test'),
+    AssignmentDisplayTitle = REPLACE(AssignmentDisplayTitle, 'Assessment', 'Test')
+WHERE AssignmentDisplayColumnName LIKE '%Assessment%'
+      OR AssignmentDisplayTitle LIKE '%Assessment%'
+OPTION (OPTIMIZE FOR UNKNOWN, MAXDOP 1);
+
+-- Enable row locks and optimize the second update query
+UPDATE stage.GradeExtractImport WITH (ROWLOCK)
+SET AssignmentDisplayColumnName = REPLACE(AssignmentDisplayColumnName, 'Interactive', 'Module'),
+    AssignmentDisplayTitle = REPLACE(AssignmentDisplayTitle, 'Interactive', 'Module')
+WHERE AssignmentDisplayColumnName LIKE '%Interactive%'
+      OR AssignmentDisplayTitle LIKE '%Interactive%'
+OPTION (OPTIMIZE FOR UNKNOWN, MAXDOP 1);
+
+-- Enable row locks and optimize the third update query
+UPDATE stage.GradeExtractImport WITH (ROWLOCK)
+SET GradeDisplayGrade = CAST(GradeDisplayScore AS VARCHAR(50)) + '0'
+WHERE GradeDisplayGrade = 'Complete'
+OPTION (OPTIMIZE FOR UNKNOWN, MAXDOP 1);
