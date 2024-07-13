@@ -1,0 +1,103 @@
+-- Create indexes with standard naming conventions
+CREATE CLUSTERED INDEX CIX_GradeExtractImport_d2l_PK1 ON stage.GradeExtractImport_d2l (PK1);
+CREATE NONCLUSTERED INDEX NCIX_GradeExtractImport_d2l_UserPK1 ON stage.GradeExtractImport_d2l (UserPK1);
+CREATE NONCLUSTERED INDEX NCIX_GradeExtractImport_d2l_CoursePK1 ON stage.GradeExtractImport_d2l (CoursePK1);
+CREATE NONCLUSTERED INDEX NCIX_GradeExtractImport_d2l_AssignmentPK1 ON stage.GradeExtractImport_d2l (AssignmentPK1);
+CREATE NONCLUSTERED INDEX NCIX_GradeExtractImport_d2l_MembershipPK1 ON stage.GradeExtractImport_d2l (MembershipPK1);
+CREATE NONCLUSTERED INDEX NCIX_GradeExtractImport_d2l_GradePK1 ON stage.GradeExtractImport_d2l (GradePK1);
+CREATE NONCLUSTERED INDEX NCIX_GradeExtractImport_d2l_SourceSystem ON stage.GradeExtractImport_d2l (SourceSystem);
+
+-- Create a table to store timing information
+IF OBJECT_ID('tempdb..#Timing') IS NOT NULL
+    DROP TABLE #Timing;
+
+CREATE TABLE #Timing (
+    StepName NVARCHAR(100),
+    StartTime DATETIME,
+    EndTime DATETIME,
+    ElapsedTime AS DATEDIFF(MILLISECOND, StartTime, EndTime)
+);
+
+-- Step 1: Insert duplicates into error table using a CTE
+DECLARE @StartTime1 DATETIME = GETDATE();
+
+WITH CTE_SGEI AS (
+    SELECT
+        PK1, UserPK1, UserEPK, UserLastName, UserFirstName, UserUserId, CoursePK1, CourseEPK, CourseCourseId, CourseTitle,
+        MembershipPK1, AssignmentPK1, AssignmentIsExternalGradeIndicator, AssignmentDisplayColumnName, AssignmentPointsPossible,
+        AssignmentDisplayTitle, GradePK1, GradeAttemptDate, GradeAttemptStatus, GradeManualGrade, GradeManualScore, GradeDisplayGrade,
+        GradeDisplayScore, GradeExemptIndicator, GradeOverrideDate, SourceSystem,
+        ROW_NUMBER() OVER (PARTITION BY UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1 ORDER BY (SELECT NULL)) AS rn
+    FROM stage.GradeExtractImport_d2l
+)
+INSERT INTO Stage.ODS_Duplicates (PrimaryKey, STEP_FAILED_ON, PROCCESED_ON)
+SELECT PK1 AS PrimaryKey, 'Grade_Merge' AS STEP_FAILED_ON, CONVERT(DATE, GETDATE()) AS PROCCESED_ON
+FROM CTE_SGEI
+WHERE rn > 1;
+
+DECLARE @EndTime1 DATETIME = GETDATE();
+INSERT INTO #Timing (StepName, StartTime, EndTime)
+VALUES ('Insert Duplicates', @StartTime1, @EndTime1);
+
+-- Step 2: Delete duplicates from the source table using a new CTE
+DECLARE @StartTime2 DATETIME = GETDATE();
+
+WITH CTE_DelDupes AS (
+    SELECT PK1
+    FROM (
+        SELECT PK1, ROW_NUMBER() OVER (PARTITION BY UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1 ORDER BY (SELECT NULL)) AS rn
+        FROM stage.GradeExtractImport_d2l
+    ) AS subquery
+    WHERE rn > 1
+)
+DELETE FROM stage.GradeExtractImport_d2l
+WHERE PK1 IN (SELECT PK1 FROM CTE_DelDupes);
+
+DECLARE @EndTime2 DATETIME = GETDATE();
+INSERT INTO #Timing (StepName, StartTime, EndTime)
+VALUES ('Delete Duplicates', @StartTime2, @EndTime2);
+
+-- Step 3: Merge deduplicated data into the destination table
+DECLARE @StartTime3 DATETIME = GETDATE();
+
+WITH GEICTE AS (
+    SELECT
+        UserPK1, UserEPK, UserLastName, UserFirstName, UserUserId, CoursePK1, CourseEPK, CourseCourseId, CourseTitle,
+        MembershipPK1, AssignmentPK1, AssignmentIsExternalGradeIndicator, AssignmentDisplayColumnName, AssignmentPointsPossible,
+        AssignmentDisplayTitle, GradePK1, GradeAttemptDate, GradeAttemptStatus, GradeManualGrade, GradeManualScore, GradeDisplayGrade,
+        GradeDisplayScore, GradeExemptIndicator, GradeOverrideDate, SourceSystem
+    FROM stage.GradeExtractImport_d2l
+    WHERE SourceSystem = 'D2L'
+)
+MERGE INTO stage.GradeExtractImport_d2l AS target
+USING (
+    SELECT DISTINCT
+        UserPK1, UserEPK, UserLastName, UserFirstName, UserUserId, CoursePK1, CourseEPK, CourseCourseId, CourseTitle,
+        MembershipPK1, AssignmentPK1, AssignmentIsExternalGradeIndicator, AssignmentDisplayColumnName, AssignmentPointsPossible,
+        AssignmentDisplayTitle, GradePK1, GradeAttemptDate, GradeAttemptStatus, GradeManualGrade, GradeManualScore, GradeDisplayGrade,
+        GradeDisplayScore, GradeExemptIndicator, GradeOverrideDate, SourceSystem
+    FROM stage.GradeExtractImport_d2l
+) AS source
+ON
+    ISNULL(source.UserPK1, '') = ISNULL(target.UserPK1, '') AND
+    ISNULL(source.CoursePK1, '') = ISNULL(target.CoursePK1, '') AND
+    ISNULL(source.AssignmentPK1, '') = ISNULL(target.AssignmentPK1, '') AND
+    ISNULL(source.MembershipPK1, '') = ISNULL(target.MembershipPK1, '') AND
+    ISNULL(source.GradePK1, '') = ISNULL(target.GradePK1, '')
+WHEN MATCHED AND NOT EXISTS (
+    SELECT
+        source.UserEPK, source.UserLastName, source.UserFirstName, source.UserUserId, source.CourseEPK, source.CourseCourseId,
+        source.CourseTitle, source.AssignmentIsExternalGradeIndicator, source.AssignmentDisplayColumnName, source.AssignmentPointsPossible,
+        source.AssignmentDisplayTitle, source.GradeAttemptDate, source.GradeAttemptStatus, source.GradeManualGrade, source.GradeManualScore,
+        source.GradeDisplayGrade, source.GradeDisplayScore, source.GradeExemptIndicator, source.GradeOverrideDate, source.SourceSystem
+    INTERSECT
+    SELECT
+        target.UserEPK, target.UserLastName, target.UserFirstName, target.UserUserId, target.CourseEPK, target.CourseCourseId,
+        target.CourseTitle, target.AssignmentIsExternalGradeIndicator, target.AssignmentDisplayColumnName, target.AssignmentPointsPossible,
+        target.AssignmentDisplayTitle, target.GradeAttemptDate, target.GradeAttemptStatus, target.GradeManualGrade, target.GradeManualScore,
+        target.GradeDisplayGrade, target.GradeDisplayScore, target.GradeExemptIndicator, target.GradeOverrideDate, target.SourceSystem
+) THEN
+    UPDATE SET
+        UserEPK = source.UserEPK, UserLastName = source.UserLastName, UserFirstName = source.UserFirstName, UserUserId = source.UserUserId,
+        CourseEPK = source.CourseEPK, CourseCourseId = source.CourseCourseId, CourseTitle = source.CourseTitle,
+        AssignmentIsExternalGradeIndicator = source.AssignmentIs
