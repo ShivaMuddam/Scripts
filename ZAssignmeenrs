@@ -1,0 +1,58 @@
+-- Create the temporary table #Assignments with appropriate indexes
+CREATE TABLE #Assignments
+(
+    AssignmentPK1 INT,
+    PointsPossible DECIMAL(18, 2),
+    NumberOfAssignments INT
+);
+
+-- Create the temporary table #Adjustments with appropriate indexes
+CREATE TABLE #Adjustments
+(
+    AssignmentPK1 INT,
+    PointsPossible DECIMAL(18, 2)
+);
+
+-- Step 1: Get list of all assignments, possible points, and number of records that are the same
+INSERT INTO #Assignments (AssignmentPK1, PointsPossible, NumberOfAssignments)
+SELECT gei.AssignmentPK1,
+       CAST(REPLACE(gei.AssignmentPointsPossible, '"', '') AS DECIMAL(18, 2)) AS PossiblePoints,
+       COUNT(1) AS NumberOfAssignments
+FROM stage.GradeExtractImport gei
+GROUP BY gei.AssignmentPK1,
+         REPLACE(gei.AssignmentPointsPossible, '"', '');
+
+-- Create index on #Assignments for better performance in the next step
+CREATE NONCLUSTERED INDEX IX_Assignments_AssignmentPK1 ON #Assignments (AssignmentPK1);
+CREATE NONCLUSTERED INDEX IX_Assignments_PointsPossible ON #Assignments (PointsPossible);
+
+-- Step 2: Compare the assignments to determine which have more than one value for points possible and store them
+WITH cteMajorities AS 
+(
+    SELECT a.AssignmentPK1,
+           MAX(a.NumberOfAssignments) AS MajorityCount
+    FROM #Assignments a
+    GROUP BY a.AssignmentPK1
+    HAVING COUNT(a.AssignmentPK1) > 1
+)
+INSERT INTO #Adjustments (AssignmentPK1, PointsPossible)
+SELECT a.AssignmentPK1,
+       a.PointsPossible
+FROM #Assignments a
+JOIN cteMajorities m ON a.AssignmentPK1 = m.AssignmentPK1
+                    AND a.NumberOfAssignments = m.MajorityCount;
+
+-- Create index on #Adjustments for better performance in the final update step
+CREATE NONCLUSTERED INDEX IX_Adjustments_AssignmentPK1 ON #Adjustments (AssignmentPK1);
+CREATE NONCLUSTERED INDEX IX_Adjustments_PointsPossible ON #Adjustments (PointsPossible);
+
+-- Step 3: Update the GradeExtractImport table to remove/overwrite all the assignments with "wrong" values for points possible
+UPDATE gei
+SET gei.AssignmentPointsPossible = a.PointsPossible
+FROM stage.GradeExtractImport gei
+JOIN #Adjustments a ON gei.AssignmentPK1 = a.AssignmentPK1
+OPTION (OPTIMIZE FOR UNKNOWN, MAXDOP 1);
+
+-- Drop temporary tables after use
+DROP TABLE #Assignments;
+DROP TABLE #Adjustments;
