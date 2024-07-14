@@ -1,0 +1,195 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[CreateIncludeIndex]
+    @SchemaName NVARCHAR(128),
+    @TableName NVARCHAR(128),
+    @IndexName NVARCHAR(128),
+    @IndexType NVARCHAR(50),  -- 'CLUSTERED', 'NONCLUSTERED', 'UNIQUE', etc.
+    @Column NVARCHAR(MAX),    -- Column(s) to index
+    @IncludeColumns NVARCHAR(MAX) = NULL,  -- Comma-separated list of columns to include
+    @ErrorMessage NVARCHAR(MAX) OUTPUT  -- Output parameter for error message
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET @ErrorMessage = NULL;
+
+    DECLARE @SQL NVARCHAR(MAX);
+    DECLARE @IndexColumns NVARCHAR(MAX);
+
+    -- Remove any spaces around the comma-separated columns
+    SET @Column = REPLACE(@Column, ' ', '');
+    SET @IncludeColumns = REPLACE(@IncludeColumns, ' ', '');
+
+    BEGIN TRY
+        -- Check if the index already exists
+        IF EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = @IndexName AND object_id = OBJECT_ID(QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName))
+        )
+        BEGIN
+            -- Drop the index if it exists
+            SET @SQL = 'DROP INDEX ' + QUOTENAME(@IndexName) +
+                       ' ON ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName);
+
+            -- Execute the SQL statement to drop the index
+            EXEC sp_executesql @SQL;
+        END
+
+        -- Construct the CREATE INDEX statement
+        SET @IndexColumns = @Column;
+        SET @SQL = 'CREATE ' + @IndexType + ' INDEX ' + QUOTENAME(@IndexName) +
+                   ' ON ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) +
+                   ' (' + @IndexColumns + ')';
+
+        -- Append INCLUDE clause if @IncludeColumns is provided and not empty
+        IF @IncludeColumns IS NOT NULL AND @IncludeColumns <> ''
+        BEGIN
+            SET @SQL = @SQL + ' INCLUDE (' + @IncludeColumns + ')';
+        END
+
+        -- Append index options
+        SET @SQL = @SQL + ' WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ' +
+                         '       ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = ON)';
+
+        -- Execute the SQL statement to create the index
+        EXEC sp_executesql @SQL;
+
+    END TRY
+    BEGIN CATCH
+        -- Capture the error message
+        SET @ErrorMessage = ERROR_MESSAGE();
+    END CATCH
+END
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[YourMainProcedure]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @ErrorMessage NVARCHAR(MAX);
+
+    -- Create Index 1
+    EXEC dbo.CreateIncludeIndex
+        @SchemaName = 'Stage',
+        @TableName = 'GradeExtractImport',
+        @IndexName = 'idx_GEI_0001',
+        @IndexType = 'NONCLUSTERED',
+        @Column = 'GradeDisplayGrade',
+        @IncludeColumns = 'GradeDisplayScore',
+        @ErrorMessage = @ErrorMessage OUTPUT;
+
+    IF @ErrorMessage IS NOT NULL
+    BEGIN
+        -- Handle the error message for Index 1
+        RAISEERROR(@ErrorMessage, 16, 1);
+        -- Additional error handling logic as needed
+    END
+
+    -- Create Index 2
+    EXEC dbo.CreateIncludeIndex
+        @SchemaName = 'Stage',
+        @TableName = 'GradeExtractImport',
+        @IndexName = 'idx_GEI_0002',
+        @IndexType = 'NONCLUSTERED',
+        @Column = 'AssignmentDisplayColumnName',
+        @IncludeColumns = 'CourseTitle, UserEPK',
+        @ErrorMessage = @ErrorMessage OUTPUT;
+
+    IF @ErrorMessage IS NOT NULL
+    BEGIN
+        -- Handle the error message for Index 2
+        RAISEERROR(@ErrorMessage, 16, 1);
+        -- Additional error handling logic as needed
+    END
+
+    -- Create Index 3 (example)
+    EXEC dbo.CreateIncludeIndex
+        @SchemaName = 'Stage',
+        @TableName = 'GradeExtractImport',
+        @IndexName = 'idx_ODS_019',
+        @IndexType = 'NONCLUSTERED',
+        @Column = 'AssignmentDisplayColumnName',
+        @IncludeColumns = '[UserPK1], [UserEPK], [CourseTitle]',
+        @ErrorMessage = @ErrorMessage OUTPUT;
+
+    IF @ErrorMessage IS NOT NULL
+    BEGIN
+        -- Handle the error message for Index 3
+        RAISEERROR(@ErrorMessage, 16, 1);
+        -- Additional error handling logic as needed
+    END
+
+    -- Continue adding more EXEC calls for additional indexes as needed
+
+END
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[CreateIncludeIndex]
+    @SchemaName NVARCHAR(128),
+    @TableName NVARCHAR(128),
+    @IndexName NVARCHAR(128),
+    @IndexType NVARCHAR(50),  -- 'CLUSTERED', 'NONCLUSTERED', 'UNIQUE', etc.
+    @Column NVARCHAR(MAX),    -- Column(s) to index
+    @IncludeColumns NVARCHAR(MAX) = NULL,  -- Comma-separated list of columns to include
+    @ErrorMessage NVARCHAR(MAX) OUTPUT  -- Output parameter for error message
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET @ErrorMessage = NULL;
+
+    DECLARE @SQL NVARCHAR(MAX);
+    DECLARE @IndexColumns NVARCHAR(MAX);
+
+    -- Remove any spaces around the comma-separated columns
+    SET @Column = REPLACE(@Column, ' ', '');
+    SET @IncludeColumns = REPLACE(@IncludeColumns, ' ', '');
+
+    BEGIN TRY
+        -- Check if the index already exists
+        IF EXISTS (
+            SELECT 1
+            FROM sys.indexes
+            WHERE name = @IndexName AND object_id = OBJECT_ID(QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName))
+        )
+        BEGIN
+            -- Drop the index if it exists
+            SET @SQL = 'DROP INDEX ' + QUOTENAME(@IndexName) +
+                       ' ON ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName);
+
+            -- Execute the SQL statement to drop the index
+            EXEC sp_executesql @SQL;
+        END
+
+        -- Construct the CREATE INDEX statement
+        SET @IndexColumns = @Column;
+        SET @SQL = 'CREATE ' + @IndexType + ' INDEX ' + QUOTENAME(@IndexName) +
+                   ' ON ' + QUOTENAME(@SchemaName) + '.' + QUOTENAME(@TableName) +
+                   ' (' + @IndexColumns + ')';
+
+        -- Append INCLUDE clause if @IncludeColumns is provided and not empty
+        IF @IncludeColumns IS NOT NULL AND @IncludeColumns <> ''
+        BEGIN
+            SET @SQL = @SQL + ' INCLUDE (' + @IncludeColumns + ')';
+        END
+
+        -- Append index options
+        SET @SQL = @SQL + ' WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ' +
+                         '       ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = ON)';
+
+        -- Execute the SQL statement to create the index
+        EXEC sp_executesql @SQL;
+
+    END TRY
+    BEGIN CATCH
+        -- Capture the error message
+        SET @ErrorMessage = ERROR_MESSAGE();
+    END CATCH
+END
