@@ -1,0 +1,211 @@
+IF EXISTS(SELECT 1 FROM sys.indexes WHERE name = 'idx_GEI_0001') 
+BEGIN 
+    DROP INDEX idx_GEI_0001 ON [stage].[GradeExtractImport]; 
+END; 
+
+IF EXISTS(SELECT 1 FROM sys.indexes WHERE name = 'idx_GEI_0002') 
+BEGIN 
+    DROP INDEX idx_GEI_0002 ON [stage].[GradeExtractImport]; 
+END; 
+
+IF EXISTS(SELECT 1 FROM sys.indexes WHERE name = 'idx_ODS_019') 
+BEGIN 
+    DROP INDEX idx_ODS_019 ON [stage].[GradeExtractImport]; 
+END;
+
+--**************************************************************************************************************************************** 
+--Dupes deletion from the gradeextract table 
+--**************************************************************************************************************************************** 
+DROP TABLE IF EXISTS #SGEI;
+
+-- Insert and handle duplicates directly into ODS_Duplicates
+WITH cte AS (
+    SELECT *,
+           ROW_NUMBER() OVER(PARTITION BY UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1 ORDER BY (SELECT NULL)) AS rn  
+    FROM [stage].[GradeExtractImport_d2l]
+)
+INSERT INTO Stage.ODS_Duplicates (PrimaryKey, STEP_FAILED_ON, PROCCESED_ON)
+SELECT PK1 AS PrimaryKey,
+       'Grade_Merge' AS STEP_FAILED_ON,
+       CONVERT(DATE, GETDATE()) AS PROCCESED_ON  
+FROM cte
+WHERE rn > 1;
+
+-- Merge data into GradeExtractImport and create necessary indexes
+WITH GEICTE AS (
+    SELECT 
+        [UserPK1],
+        [UserEPK],
+        [UserLastName],
+        [UserFirstName],
+        [UserUserId],
+        [CoursePK1],
+        [CourseEPK],
+        [CourseCourseId],
+        [CourseTitle],
+        [MembershipPK1],
+        [AssignmentPK1],
+        [AssignmentIsExternalGradeIndicator],
+        [AssignmentDisplayColumnName],
+        [AssignmentPointsPossible],
+        [AssignmentDisplayTitle],
+        [GradePK1],
+        [GradeAttemptDate],
+        [GradeAttemptStatus],
+        [GradeManualGrade],
+        [GradeManualScore],
+        [GradeDisplayGrade],
+        [GradeDisplayScore],
+        [GradeExemptIndicator],
+        [GradeOverrideDate],
+        [SourceSystem]
+    FROM [stage].[GradeExtractImport]
+    WHERE [SourceSystem] = 'D2L'
+)
+MERGE INTO GEICTE AS target
+USING (
+    SELECT *,
+           ROW_NUMBER() OVER(PARTITION BY UserPK1, CoursePK1, AssignmentPK1, MembershipPK1, GradePK1 ORDER BY (SELECT NULL)) AS rn  
+    FROM [stage].[GradeExtractImport_d2l]
+) AS source
+ON ISNULL(source.[UserPK1], '') = ISNULL(target.[UserPK1], '')
+   AND ISNULL(source.[CoursePK1], '') = ISNULL(target.[CoursePK1], '')
+   AND ISNULL(source.[AssignmentPK1], '') = ISNULL(target.[AssignmentPK1], '')
+   AND ISNULL(source.[MembershipPk1], '') = ISNULL(target.[MembershipPK1], '')
+   AND ISNULL(source.[GradePK1], '') = ISNULL(target.[GradePK1], '')
+WHEN MATCHED AND NOT EXISTS (
+    SELECT
+        source.[UserEPK],
+        source.[UserLastName],
+        source.[UserFirstName],
+        source.[UserUserId],
+        source.[CourseEPK],
+        source.[CourseCourseId],
+        source.[CourseTitle],
+        source.[AssignmentIsExternalGradeIndicator],
+        source.[AssignmentDisplayColumnName],
+        source.[AssignmentPointsPossible],
+        source.[AssignmentDisplayTitle],
+        source.[GradeAttemptDate],
+        source.[GradeAttemptStatus],
+        source.[GradeManualGrade],
+        source.[GradeManualScore],
+        source.[GradeDisplayGrade],
+        source.[GradeDisplayScore],
+        source.[GradeExemptIndicator],
+        source.[GradeOverrideDate],
+        source.[SourceSystem]
+    INTERSECT
+    SELECT
+        target.[UserEPK],
+        target.[UserLastName],
+        target.[UserFirstName],
+        target.[UserUserId],
+        target.[CourseEPK],
+        target.[CourseCourseId],
+        target.[CourseTitle],
+        target.[AssignmentIsExternalGradeIndicator],
+        target.[AssignmentDisplayColumnName],
+        target.[AssignmentPointsPossible],
+        target.[AssignmentDisplayTitle],
+        target.[GradeAttemptDate],
+        target.[GradeAttemptStatus],
+        target.[GradeManualGrade],
+        target.[GradeManualScore],
+        target.[GradeDisplayGrade],
+        target.[GradeDisplayScore],
+        target.[GradeExemptIndicator],
+        target.[GradeOverrideDate],
+        target.[SourceSystem]
+) THEN
+    UPDATE SET
+        [UserEPK] = source.[UserEPK],
+        [UserLastName] = source.[UserLastName],
+        [UserFirstName] = source.[UserFirstName],
+        [UserUserId] = source.[UserUserId],
+        [CourseEPK] = source.[CourseEPK],
+        [CourseCourseId] = source.[CourseCourseId],
+        [CourseTitle] = source.[CourseTitle],
+        [AssignmentIsExternalGradeIndicator] = source.[AssignmentIsExternalGradeIndicator],
+        [AssignmentDisplayColumnName] = source.[AssignmentDisplayColumnName],
+        [AssignmentPointsPossible] = source.[AssignmentPointsPossible],
+        [AssignmentDisplayTitle] = source.[AssignmentDisplayTitle],
+        [GradeAttemptDate] = source.[GradeAttemptDate],
+        [GradeAttemptStatus] = source.[GradeAttemptStatus],
+        [GradeManualGrade] = source.[GradeManualGrade],
+        [GradeManualScore] = source.[GradeManualScore],
+        [GradeDisplayGrade] = source.[GradeDisplayGrade],
+        [GradeDisplayScore] = source.[GradeDisplayScore],
+        [GradeExemptIndicator] = source.[GradeExemptIndicator],
+        [GradeOverrideDate] = source.[GradeOverrideDate],
+        [SourceSystem] = source.[SourceSystem]
+WHEN NOT MATCHED THEN
+    INSERT (
+        [UserPK1],
+        [UserEPK],
+        [UserLastName],
+        [UserFirstName],
+        [UserUserId],
+        [CoursePK1],
+        [CourseEPK],
+        [CourseCourseId],
+        [CourseTitle],
+        [MembershipPK1],
+        [AssignmentPK1],
+        [AssignmentIsExternalGradeIndicator],
+        [AssignmentDisplayColumnName],
+        [AssignmentPointsPossible],
+        [AssignmentDisplayTitle],
+        [GradePK1],
+        [GradeAttemptDate],
+        [GradeAttemptStatus],
+        [GradeManualGrade],
+        [GradeManualScore],
+        [GradeDisplayGrade],
+        [GradeDisplayScore],
+        [GradeExemptIndicator],
+        [GradeOverrideDate],
+        [SourceSystem]
+    )
+    VALUES (
+        source.[UserPK1],
+        source.[UserEPK],
+        source.[UserLastName],
+        source.[UserFirstName],
+        source.[UserUserId],
+        source.[CoursePK1],
+        source.[CourseEPK],
+        source.[CourseCourseId],
+        source.[CourseTitle],
+        source.[MembershipPK1],
+        source.[AssignmentPK1],
+        source.[AssignmentIsExternalGradeIndicator],
+        source.[AssignmentDisplayColumnName],
+        source.[AssignmentPointsPossible],
+        source.[AssignmentDisplayTitle],
+        source.[GradePK1],
+        source.[GradeAttemptDate],
+        source.[GradeAttemptStatus],
+        source.[GradeManualGrade],
+        source.[GradeManualScore],
+        source.[GradeDisplayGrade],
+        source.[GradeDisplayScore],
+        source.[GradeExemptIndicator],
+        source.[GradeOverrideDate],
+        source.[SourceSystem]
+    )
+WHEN NOT MATCHED BY SOURCE THEN
+    DELETE;
+
+-- Create necessary indexes on GradeExtractImport
+CREATE NONCLUSTERED INDEX [idx_GEI_0001] ON [stage].[GradeExtractImport] (
+    [GradeDisplayGrade] ASC
+) INCLUDE ([GradeDisplayScore]);
+
+CREATE NONCLUSTERED INDEX [idx_GEI_0002] ON [stage].[GradeExtractImport] (
+    [AssignmentDisplayColumnName] ASC
+) INCLUDE ([CourseTitle], [UserEPK]);
+
+CREATE NONCLUSTERED INDEX [idx_ODS_019] ON [stage].[GradeExtractImport] (
+    [AssignmentDisplayColumnName] ASC
+) INCLUDE ([UserPK1], [UserEPK], [CourseTitle]);
