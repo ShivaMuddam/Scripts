@@ -1,0 +1,147 @@
+DROP INDEX IF EXISTS LS_ODS.Grades.idx_ODS_010;
+DROP INDEX IF EXISTS LS_ODS.Grades._dta_index_Grades_10_1223675407__K2_K23_K21_4;
+DROP INDEX IF EXISTS LS_ODS.Grades.idx_LSiDashCourseUsersPrimaryKeyDESC;
+DROP INDEX IF EXISTS LS_ODS.Grades.idx_LSiDashCourseuserspkAssignmentpkActiveflagDESC;
+DROP INDEX IF EXISTS LS_ODS.Grades.idx_LSiDashAssignmentPrimaryKeyDESC;
+DROP INDEX IF EXISTS LS_ODS.Grades.idx_LSiDashActiveFlagLargeIncludeDESC;
+DROP INDEX IF EXISTS LS_ODS.Grades.idx_CourseUsersPKAssignPKActiveFG;
+
+-- Create fresh non-clustered indexes
+
+CREATE NONCLUSTERED INDEX idx_ODS_010
+ON LS_ODS.Grades (
+    GradePrimaryKey ASC,
+    ActiveFlag ASC
+)
+INCLUDE (
+    CourseUsersPrimaryKey,
+    RowStatus,
+    HighestScore,
+    HighestGrade,
+    HighestAttemptDateTime,
+    ManualScore,
+    ManualGrade,
+    ManualDateTime,
+    ExemptIndicator,
+    HighestDateTimeCreated,
+    HighestDateTimeModified,
+    HighestIsLatestAttemptIndicator,
+    NumberOfAttempts,
+    FirstScore,
+    FirstGrade,
+    FirstAttemptDateTime,
+    FirstIsLatestAttemptIndicator,
+    FirstDateTimeModified,
+    AssignmentPrimaryKey,
+    AssignmentStatus,
+    SourceSystem
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON)
+ON [PRIMARY];
+
+CREATE NONCLUSTERED INDEX idx_CourseUsersPrimaryKey_ActiveFlag_AssignmentPrimaryKey
+ON LS_ODS.Grades (
+    CourseUsersPrimaryKey ASC,
+    ActiveFlag ASC,
+    AssignmentPrimaryKey ASC
+)
+INCLUDE (
+    HighestScore
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON)
+ON [PRIMARY];
+
+CREATE NONCLUSTERED INDEX idx_CourseUsersPrimaryKeyDESC
+ON LS_ODS.Grades (
+    CourseUsersPrimaryKey DESC
+)
+INCLUDE (
+    GradePrimaryKey,
+    AssignmentPrimaryKey,
+    ActiveFlag,
+    AssignmentStatus,
+    HighestGrade,
+    HighestScore,
+    HighestAttemptDateTime,
+    ManualScore,
+    ManualGrade,
+    HighestDateTimeCreated,
+    NumberOfAttempts
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 95)
+ON [PRIMARY];
+
+CREATE NONCLUSTERED INDEX idx_CourseUsersPrimaryKey_AssignmentPrimaryKey_ActiveFlagDESC
+ON LS_ODS.Grades (
+    CourseUsersPrimaryKey DESC,
+    AssignmentPrimaryKey DESC,
+    ActiveFlag DESC
+)
+INCLUDE (
+    GradePrimaryKey,
+    HighestScore,
+    HighestDateTimeCreated,
+    AssignmentStatus
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 95)
+ON [PRIMARY];
+
+CREATE NONCLUSTERED INDEX idx_AssignmentPrimaryKeyDESC
+ON LS_ODS.Grades (
+    AssignmentPrimaryKey DESC
+)
+INCLUDE (
+    GradePrimaryKey,
+    CourseUsersPrimaryKey,
+    ActiveFlag,
+    AssignmentStatus,
+    HighestGrade,
+    HighestScore,
+    HighestAttemptDateTime,
+    ManualScore,
+    ManualGrade,
+    HighestDateTimeCreated,
+    NumberOfAttempts
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 95)
+ON [PRIMARY];
+
+CREATE NONCLUSTERED INDEX idx_ActiveFlagDESC
+ON LS_ODS.Grades (
+    ActiveFlag DESC
+)
+INCLUDE (
+    GradePrimaryKey,
+    AssignmentPrimaryKey,
+    CourseUsersPrimaryKey,
+    AssignmentStatus,
+    HighestGrade,
+    HighestScore,
+    HighestAttemptDateTime,
+    ManualScore,
+    ManualGrade,
+    HighestDateTimeCreated,
+    NumberOfAttempts
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 95)
+ON [PRIMARY];
+
+CREATE NONCLUSTERED INDEX idx_CourseUsersPK_AssignmentPK_ActiveFlag
+ON LS_ODS.Grades (
+    CourseUsersPrimaryKey ASC,
+    AssignmentPrimaryKey ASC,
+    ActiveFlag ASC
+)
+INCLUDE (
+    GradePrimaryKey,
+    HighestScore,
+    HighestGrade,
+    HighestAttemptDateTime,
+    ManualScore,
+    ManualGrade,
+    HighestDateTimeCreated,
+    NumberOfAttempts,
+    AssignmentStatus
+)
+WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON)
+ON [PRIMARY];
